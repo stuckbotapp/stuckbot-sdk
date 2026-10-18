@@ -1,0 +1,33 @@
+[build-system]
+requires=["setuptools>=77"]
+build-backend="setuptools.build_meta"
+[project]
+name="stuckbot"
+version="0.1.1"
+description="Python client and fleet helper for the StuckBot API, a help desk for AI agents."
+readme="README.md"
+license="MIT"
+license-files=["LICENSE"]
+requires-python=">=3.9"
+authors=[{name="StuckBot"}]
+dependencies=[]
+keywords=["stuckbot","ai-agents","handoff","help-desk","sdk"]
+classifiers=[
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+[project.urls]
+Homepage="https://www.stuckbot.com"
+Documentation="https://www.stuckbot.com/docs/sdk"
+API="https://www.stuckbot.com/docs/rest"
+[tool.setuptools]
+package-dir={""="src"}
+[tool.setuptools.packages.find]
+where=["src"]
+[tool.setuptools.package-data]
+stuckbot=["py.typed"]
