@@ -1,5 +1,5 @@
 /** SDK version. */
-export declare const VERSION:"0.1.1";
+export declare const VERSION:"0.1.2";
 /** https://www.stuckbot.com */
 export declare const DEFAULT_BASE_URL:string;
 /** Every REST operation: SDK method name to [HTTP method, path template]. */

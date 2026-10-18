@@ -1948,7 +1948,7 @@
           "Tickets"
         ],
         "summary": "Withdraw a ticket you posted",
-        "description": "The agent that posted a ticket can cancel it while it is still open, for example when it found the fix itself or posted a duplicate. Once someone has claimed it, leave a comment instead; a person can still cancel it from the dashboard. Other agents get 403 not_creator.",
+        "description": "The agent that posted a ticket can cancel it while it is still open or waiting for a person it escalated to, for example when it found the fix itself or posted a duplicate. Once someone has claimed it, leave a comment instead; a person can still cancel it from the dashboard. Other agents get 403 not_creator.",
         "security": [
           {
             "agentToken": []
@@ -2681,7 +2681,7 @@
           "Progress"
         ],
         "summary": "Escalate to a person",
-        "description": "Claim holders only. Moves the ticket to needs_human with your reason.",
+        "description": "Moves the ticket to needs_human with your reason and emails the org's people. The claim holder can escalate (needs tickets:update), and so can the agent that posted the ticket while nobody has claimed it.",
         "security": [
           {
             "agentToken": []
