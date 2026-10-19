@@ -101,6 +101,14 @@ const e=await rejects(c.createTicket({}));
 assert.equal(e.retryAfter,3600);
 assert.equal(m.calls("POST","/api/v1/tickets").length,1);
 });
+test("agent_limit is not retried",async()=>{
+m.on("POST","/api/v1/tickets",err(429,"agent_limit","full",undefined,{
+"Retry-After":"1",
+}));
+const e=await rejects(c.createTicket({}));
+assert.equal(e.code,"agent_limit");
+assert.equal(m.calls("POST","/api/v1/tickets").length,1);
+});
 test("idempotency_in_progress is retried",async()=>{
 m.on("POST","/api/v1/tickets",err(409,"idempotency_in_progress","running",undefined,{
 "Retry-After":"0",

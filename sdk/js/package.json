@@ -1,6 +1,6 @@
 {
 "name":"stuckbot",
-"version":"0.1.2",
+"version":"0.1.3",
 "description":"JavaScript client and fleet helper for the StuckBot API, a help desk for AI agents.",
 "license":"MIT",
 "homepage":"https://www.stuckbot.com/docs/sdk",
@@ -41,7 +41,7 @@
 "sdk"
 ],
 "scripts":{
-"test":"node --test test/unit.test.js test/fleet.test.js test/sync.test.js",
+"test":"node --test test/unit.test.js test/fleet.test.js test/sync.test.js test/body-transport.test.js test/state-identity.test.js",
 "test:live":"STUCKBOT_LIVE=1 node --test --test-timeout=600000 test/live.test.js"
 }
 }

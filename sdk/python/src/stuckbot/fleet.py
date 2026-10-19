@@ -1,5 +1,6 @@
 from __future__ import annotations
-import calendar
+import datetime
+import hashlib
 import contextlib
 import json
 import os
@@ -13,11 +14,16 @@ LEASED=("claimed","working","continuing")
 _TS=re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d(?::?\d\d)?)?$")
 def parse_time(value:Optional[str])->Optional[float]:
     """Parse a server timestamp into Unix seconds."""
-    m=_TS.match(value or "")
+    if not isinstance(value,str):
+        return None
+    m=_TS.match(value)
     if not m:
         return None
     y,mo,d,h,mi,s=(int(x) for x in m.groups()[:6])
-    t=calendar.timegm((y,mo,d,h,mi,s,0,0,0))+(float("0."+m.group(7)) if m.group(7) else 0.0)
+    try:
+        t=datetime.datetime(y,mo,d,h,mi,s,tzinfo=datetime.timezone.utc).timestamp()+(float("0."+m.group(7)) if m.group(7) else 0.0)
+    except (ValueError,OverflowError):
+        return None
     z=m.group(8)
     if z and z!="Z":
         sign=-1 if z[0]=="-" else 1
@@ -148,6 +154,9 @@ class FleetAgent:
         self.registrations=0
         self.renewals=0
         self.heartbeats=0
+        self._sent=0
+        self._applied=0
+        self._seen=set()
         self._renew_at=None
         self._lock=threading.RLock()
         self._stop=threading.Event()
@@ -177,7 +186,7 @@ class FleetAgent:
                 self._thread.start()
         return self
     def stop(self)->None:
-        """Stop heartbeats, renewal, lease renewal and polling. The token stays valid until it expires, unless retire_on_stop is set: then the agent is retired (its tickets go back to open) and the state file is deleted. A failed retire goes to on_error."""
+        """Stop heartbeats, renewal, lease renewal and polling. The token stays valid until it expires, unless retire_on_stop is set: then the agent is retired (tickets it is working on go back to open, tickets waiting for review stay until decided) and the state file is deleted. A failed retire goes to on_error."""
         self._stop.set()
         self._wake.set()
         for lease in list(self._leases):
@@ -214,6 +223,9 @@ class FleetAgent:
         before=self.renew_before if self.renew_before is not None else max(30.0,left/2)
         self._renew_at=time.monotonic()+max(0.0,left-before)
         self._wake.set()
+    def _state_key(self):
+        data=json.dumps([self.enrollment_secret,sorted(self.registration.get("scopes",[])),sorted(self.registration.get("project_ids",[]))],separators=(",",":"))
+        return hashlib.sha256(data.encode()).hexdigest()
     def _resume(self):
         if not self.state_file or not os.path.exists(self.state_file):
             return False
@@ -222,8 +234,10 @@ class FleetAgent:
                 s=json.load(f)
         except (OSError,ValueError):
             return False
+        if not isinstance(s,dict) or s.get("registration_key")!=self._state_key():
+            return False
         end=parse_time(s.get("expires_at"))
-        if not s.get("token") or s.get("base_url")!=self.client.base_url or end is None or end<time.time()+30:
+        if not isinstance(s.get("token"),str) or not s["token"] or s.get("base_url")!=self.client.base_url or end is None or end<time.time()+30:
             return False
         self.client.token=s["token"]
         try:
@@ -248,7 +262,7 @@ class FleetAgent:
     def _save(self):
         if not self.state_file:
             return
-        data=json.dumps({"base_url":self.client.base_url,"agent_id":self.agent_id,"agent_name":(self.agent or {}).get("name"),"token":self.client.token,"expires_at":self.expires_at})
+        data=json.dumps({"registration_key":self._state_key(),"base_url":self.client.base_url,"agent_id":self.agent_id,"agent_name":(self.agent or {}).get("name"),"token":self.client.token,"expires_at":self.expires_at})
         tmp=f"{self.state_file}.{os.getpid()}.tmp"
         fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
         with os.fdopen(fd,"w") as f:
@@ -276,20 +290,33 @@ class FleetAgent:
             except StuckBotError:
                 return False
             return True
-    def _flags(self,d):
+    def _seq(self):
+        with self._lock:
+            self._sent+=1
+            return self._sent
+    def _flags(self,d,seq):
         if not isinstance(d,dict):
             return
-        for key,cb in (("handoff_requested",self.on_handoff_requested),("stop_requested",self.on_stop_requested)):
-            if key not in d:
-                continue
-            new=d.get(key)
-            old=getattr(self,key)
-            setattr(self,key,new)
-            if new and not old and cb:
-                try:
-                    cb(new)
-                except Exception as e:
-                    self._report(e)
+        fire=[]
+        with self._lock:
+            if seq<self._applied:
+                return
+            self._applied=seq
+            for key,cb in (("handoff_requested",self.on_handoff_requested),("stop_requested",self.on_stop_requested)):
+                if key not in d:
+                    continue
+                new=d.get(key)
+                setattr(self,key,new)
+                ident=key+json.dumps(new,sort_keys=True)
+                if new and ident not in self._seen:
+                    self._seen.add(ident)
+                    if cb:
+                        fire.append((cb,new))
+        for cb,new in fire:
+            try:
+                cb(new)
+            except Exception as e:
+                self._report(e)
     def _report(self,e):
         self.last_error=e
         if self.on_error:
@@ -304,9 +331,10 @@ class FleetAgent:
             p=self.heartbeat_payload() or {}
             status=p.get("status")
             usage=p.get("usage")
+        seq=self._seq()
         r=self.client.heartbeat(status=status,usage=usage)
         self.heartbeats+=1
-        self._flags(r)
+        self._flags(r,seq)
         if r.get("token_expires_soon"):
             self._renew_at=time.monotonic()
             self._wake.set()
@@ -314,8 +342,9 @@ class FleetAgent:
     def check_signals(self,limit:Optional[int]=None)->Dict[str,Any]:
         """Read this agent's signals and update handoff_requested and stop_requested."""
         self._ensure()
+        seq=self._seq()
         r=self.client.list_my_signals(limit)
-        self._flags(r)
+        self._flags(r,seq)
         return r
     def _run(self):
         next_hb=time.monotonic()
@@ -340,6 +369,7 @@ class FleetAgent:
         """Yield claimable tickets and updates from /work until stop() is called, waiting retry_after_seconds between polls."""
         self._ensure()
         while not self._stop.is_set():
+            seq=self._seq()
             try:
                 r=self.client.work(cursor=self.cursor,**filters)
             except StuckBotError as e:
@@ -349,7 +379,7 @@ class FleetAgent:
                 if self._stop.wait(min(max_wait or 30.0,e.retry_after or 30.0)):
                     return
                 continue
-            self._flags(r)
+            self._flags(r,seq)
             if not r.unchanged:
                 for t in r.get("claimable") or []:
                     yield WorkItem(t.get("work","claim"),t)

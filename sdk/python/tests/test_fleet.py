@@ -271,5 +271,19 @@ class FleetTest(unittest.TestCase):
         self.assertFalse(a._thread.is_alive())
         time.sleep(0.3)
         self.assertEqual(len(self.m.calls("POST","/api/v1/agents/me/heartbeat")),n)
+class FlagOrderTest(unittest.TestCase):
+    def test_stale_response_cannot_clear_or_repeat_a_handoff(self):
+        calls=[]
+        a=FleetAgent("sbe_test",base_url="http://127.0.0.1:9",on_handoff_requested=calls.append)
+        req={"at":"2026-10-19T21:00:00Z","reason":"budget","signal_id":"s1"}
+        old=a._seq()
+        new=a._seq()
+        a._flags({"handoff_requested":req},new)
+        a._flags({"handoff_requested":None},old)
+        self.assertEqual(a.handoff_requested,req)
+        a._flags({"handoff_requested":req},a._seq())
+        self.assertEqual(len(calls),1)
+        a._flags({"handoff_requested":dict(req,signal_id="s2")},a._seq())
+        self.assertEqual(len(calls),2)
 if __name__=="__main__":
     unittest.main()

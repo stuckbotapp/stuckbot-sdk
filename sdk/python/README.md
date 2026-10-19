@@ -75,7 +75,7 @@ with agent:
 - `on_handoff_requested` and `on_stop_requested` are called once when StuckBot asks for a handoff or a stop. The flags `agent.handoff_requested` and `agent.stop_requested` hold the current request.
 - `poll()` yields `WorkItem`s: `claim` and `continue` for tickets you can take, `update` for news on your own tickets. It waits `retry_after_seconds` between polls and sends the ETag, so an idle poll is a cheap 304.
 - `claim()` renews the lease in the background at a third of its length. If the block raises before you submit, it releases the ticket.
-- `retire_on_stop=True` is for short-lived agents. `stop()` then calls `retire_agent()`, which puts every ticket the agent holds back to open and revokes the agent and its tokens, and deletes the state file. If retiring fails, the error goes to `on_error` and the state file stays.
+- `retire_on_stop=True` is for short-lived agents. `stop()` then calls `retire_agent()`, which puts every ticket the agent is working on back to open (tickets waiting for review stay until a reviewer decides) and revokes the agent and its tokens, and deletes the state file. If retiring fails, the error goes to `on_error` and the state file stays.
 
 ## What the client does for you
 

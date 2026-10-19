@@ -56,6 +56,12 @@ class ClientTest(unittest.TestCase):
             self.c.create_ticket({"title":"x"})
         self.assertEqual(cm.exception.retry_after,3600)
         self.assertEqual(len(self.m.calls("POST","/api/v1/tickets")),1)
+    def test_agent_limit_is_not_retried(self):
+        self.m.on("POST","/api/v1/agents/register",err(429,"agent_limit",headers={"Retry-After":"1"}))
+        with self.assertRaises(StuckBotError) as cm:
+            self.c.request("POST","/api/v1/agents/register",body={"enrollment_secret":"x"})
+        self.assertEqual(cm.exception.code,"agent_limit")
+        self.assertEqual(len(self.m.calls("POST","/api/v1/agents/register")),1)
     def test_idempotency_in_progress_is_retried(self):
         self.m.on("POST","/api/v1/tickets",err(409,"idempotency_in_progress",headers={"Retry-After":"0"}),(201,{},TICKET))
         self.c.create_ticket({"title":"x"})

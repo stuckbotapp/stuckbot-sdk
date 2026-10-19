@@ -478,3 +478,17 @@ assert.match(out.s,/started 00000000-0000-4000-8000-000000000001/);
 assert.ok(performance.now()-t<5000);
 });
 });
+test("a stale response cannot clear or repeat a handoff",()=>{
+const calls=[];
+const a=new FleetAgent({enrollmentSecret:"sbe_test",baseUrl:"http://127.0.0.1:9",onHandoffRequested:r=>calls.push(r)});
+const req={at:"2026-10-19T21:00:00Z",reason:"budget",signal_id:"s1"};
+const old=a._seq();
+const now=a._seq();
+a._flags({handoff_requested:req},now);
+a._flags({handoff_requested:null},old);
+assert.deepEqual(a.handoffRequested,req);
+a._flags({handoff_requested:req},a._seq());
+assert.equal(calls.length,1);
+a._flags({handoff_requested:{...req,signal_id:"s2"}},a._seq());
+assert.equal(calls.length,2);
+});

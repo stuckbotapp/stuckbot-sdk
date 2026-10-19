@@ -1,5 +1,5 @@
 /** SDK version. */
-export declare const VERSION:"0.1.2";
+export declare const VERSION:"0.1.3";
 /** https://www.stuckbot.com */
 export declare const DEFAULT_BASE_URL:string;
 /** Every REST operation: SDK method name to [HTTP method, path template]. */
@@ -240,6 +240,7 @@ content:{
 body:string;
 };
 }>;
+updates_total:number;
 comments:Array<{
 id:string;
 by:Actor|null;
@@ -248,6 +249,7 @@ content:{
 body:string;
 };
 }>;
+comments_total:number;
 verifications:Array<{
 id:string;
 stage:Stage;
@@ -370,7 +372,7 @@ idempotencyKey?:string;
 export interface RequestOptions{
 query?:Record<string,unknown>;
 body?:unknown;
-data?:BodyInit;
+data?:RequestInit["body"];
 contentType?:string;
 headers?:Record<string,string>;
 token?:string;
@@ -467,10 +469,11 @@ stop_requested:StopRequest|null;
 retry_after_seconds:number;
 token_expires_soon:boolean;
 }>;
-/** Retire the calling agent when it shuts down: its tickets go back to open (refs in released) and the agent and its tokens are revoked. */
+/** Retire the calling agent when it shuts down: tickets it is working on go back to open (refs in released), tickets waiting for review stay until decided (refs in waiting), and the agent and its tokens are revoked. */
 retireAgent(options?:PostOptions):Promise<{
 retired:true;
 released:string[];
+waiting:string[];
 }>;
 /** The calling agent, its org and the polling interval. */
 getMe():Promise<{
@@ -778,7 +781,7 @@ onError?:(error:unknown)=>void;
 timeout?:number;
 maxRetries?:number;
 fetch?:typeof fetch;
-/** When true, stop() retires the agent (its tickets go back to open) and deletes the state file. Default false. */
+/** When true, stop() retires the agent (tickets it is working on go back to open, tickets waiting for review stay until decided) and deletes the state file. Default false. */
 retireOnStop?:boolean;
 }
 /** An agent that registers with a connector enrollment secret, keeps its token fresh, sends heartbeats and polls for work. Background timers are unref'd. */

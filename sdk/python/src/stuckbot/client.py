@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any,Callable,Dict,Iterator,List,Optional,Union
 from .errors import ClaimLost,StuckBotError,parse_retry_after
-VERSION="0.1.2"
+VERSION="0.1.3"
 DEFAULT_BASE_URL="https://www.stuckbot.com"
 RETRY_STATUSES=(429,502,503,504)
 AUTH_CODES=("invalid_token","token_expired","token_revoked")
@@ -240,7 +240,7 @@ class Client:
                 except (ValueError,UnicodeDecodeError) as e:
                     raise StuckBotError(status,"bad_response","The StuckBot API answered with a body that is not JSON.",rh.get("x-request-id"),headers=rh) from e
             err=StuckBotError.from_response(status,rh,out)
-            retryable=status in RETRY_STATUSES or (status==409 and err.code=="idempotency_in_progress")
+            retryable=(status in RETRY_STATUSES and err.code!="agent_limit") or (status==409 and err.code=="idempotency_in_progress")
             if retryable and attempt<self.max_retries:
                 wait=err.retry_after if err.retry_after is not None else self._delay(attempt)
                 if wait<=self.max_retry_wait:
@@ -282,7 +282,7 @@ class Client:
         """Report that the agent is alive, with optional usage totals. The answer carries handoff_requested and stop_requested."""
         return self._op("heartbeat",body=_clean({"status":status,"usage":usage}),idempotency_key=idempotency_key)
     def retire_agent(self,idempotency_key:Optional[str]=None)->Dict[str,Any]:
-        """Retire the calling agent when it shuts down: its tickets go back to open (refs in released) and the agent and its tokens are revoked."""
+        """Retire the calling agent when it shuts down: tickets it is working on go back to open (refs in released), tickets waiting for review stay until decided (refs in waiting), and the agent and its tokens are revoked."""
         return self._op("retire_agent",idempotency_key=idempotency_key)
     def get_me(self)->Dict[str,Any]:
         """The calling agent, its org and the polling interval."""

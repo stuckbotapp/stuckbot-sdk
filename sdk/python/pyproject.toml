@@ -3,7 +3,7 @@ requires=["setuptools>=77"]
 build-backend="setuptools.build_meta"
 [project]
 name="stuckbot"
-version="0.1.2"
+version="0.1.3"
 description="Python client and fleet helper for the StuckBot API, a help desk for AI agents."
 readme="README.md"
 license="MIT"

@@ -1,4 +1,4 @@
-export const VERSION="0.1.2";
+export const VERSION="0.1.3";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,
@@ -297,6 +297,7 @@ h["Idempotency-Key"]=key;
 }
 Object.assign(h,options.headers??{});
 let res;
+let out;
 try{
 res=await this.fetch(url,{
 method,
@@ -305,6 +306,9 @@ body:payload,
 redirect:"manual",
 signal:AbortSignal.timeout(this.timeout),
 });
+if(res.status!==304&&res.type!=="opaqueredirect"&&(res.status<300||res.status>=400)){
+out=options.raw&&res.status<400?new Uint8Array(await res.arrayBuffer()):await res.text();
+}
 }catch(err){
 if(attempt>=this.maxRetries){
 throw new StuckBotError(0,"network_error",`Could not reach StuckBot at ${this.baseUrl}: ${err?.message??err}`,{
@@ -342,9 +346,9 @@ headers:rh,
 }
 if(res.status<400){
 if(options.raw){
-return new Uint8Array(await res.arrayBuffer());
+return out;
 }
-const text=await res.text();
+const text=out;
 if(!text){
 return {};
 }
@@ -357,8 +361,8 @@ headers:rh,
 });
 }
 }
-const err=StuckBotError.fromResponse(res.status,rh,await res.text());
-const retryable=RETRY_STATUSES.has(res.status)||(res.status===409&&err.code==="idempotency_in_progress");
+const err=StuckBotError.fromResponse(res.status,rh,out);
+const retryable=(RETRY_STATUSES.has(res.status)&&err.code!=="agent_limit")||(res.status===409&&err.code==="idempotency_in_progress");
 if(retryable&&attempt<this.maxRetries){
 const wait=err.retryAfter!==null?err.retryAfter*1000:this._delay(attempt);
 if(wait<=this.maxRetryWait){
@@ -886,6 +890,9 @@ this.lastError=null;
 this.registrations=0;
 this.renewals=0;
 this.heartbeats=0;
+this._sent=0;
+this._applied=0;
+this._seen=new Set();
 this._hbTimer=null;
 this._renewTimer=null;
 this._renewing=null;
@@ -1012,6 +1019,9 @@ if(!this._stopped&&this.agent){
 this._scheduleRenew();
 }
 }
+async _stateKey(){
+return sha256Hex(new TextEncoder().encode(JSON.stringify([this.enrollmentSecret,[...(this.registration.scopes??[])].sort(),[...(this.registration.projectIds??[])].sort()])));
+}
 async _resume(){
 if(!this.stateFile){
 return false;
@@ -1023,8 +1033,11 @@ s=JSON.parse(await fs.readFile(this.stateFile,"utf8"));
 }catch{
 return false;
 }
+if(!s||typeof s!=="object"||Array.isArray(s)||s.registration_key!==await this._stateKey()){
+return false;
+}
 const end=parseTime(s.expires_at);
-if(!s.token||s.base_url!==this.client.baseUrl||end===null||end<Date.now()+30000){
+if(typeof s.token!=="string"||!s.token||s.base_url!==this.client.baseUrl||end===null||end<Date.now()+30000){
 return false;
 }
 this.client.token=s.token;
@@ -1062,6 +1075,7 @@ return;
 const fs=await import("node:fs/promises");
 const tmp=`${this.stateFile}.${globalThis.process?.pid??"x"}.tmp`;
 await fs.writeFile(tmp,JSON.stringify({
+registration_key:await this._stateKey(),
 base_url:this.client.baseUrl,
 agent_id:this.agentId,
 agent_name:this.agent?.name??null,
@@ -1113,10 +1127,14 @@ return true;
 return false;
 }
 }
-_flags(d){
-if(!d||typeof d!=="object"){
+_seq(){
+return ++this._sent;
+}
+_flags(d,seq){
+if(!d||typeof d!=="object"||seq<this._applied){
 return;
 }
+this._applied=seq;
 for(const [key,prop,cb] of [
 ["handoff_requested","handoffRequested",this.onHandoffRequested],
 ["stop_requested","stopRequested",this.onStopRequested],
@@ -1125,9 +1143,9 @@ if(!(key in d)){
 continue;
 }
 const now=d[key]??null;
-const old=this[prop];
 this[prop]=now;
-if(now&&!old&&cb){
+const ident=key+JSON.stringify(now);
+if(now&&!this._seen.has(ident)&&this._seen.add(ident)&&cb){
 try{
 cb(now);
 }catch(err){
@@ -1145,12 +1163,13 @@ const p=await this.heartbeatPayload()??{};
 status=p.status;
 usage=p.usage;
 }
+const seq=this._seq();
 const r=await this.client.heartbeat({
 status,
 usage,
 });
 this.heartbeats++;
-this._flags(r);
+this._flags(r,seq);
 if(r.token_expires_soon){
 this._scheduleRenew(Date.now());
 }
@@ -1158,8 +1177,9 @@ return r;
 }
 async checkSignals(options={}){
 await this._ensure();
+const seq=this._seq();
 const r=await this.client.listMySignals(options);
-this._flags(r);
+this._flags(r,seq);
 return r;
 }
 _sleep(ms){
@@ -1187,6 +1207,7 @@ const {maxWait,stopOnStopRequested=true,...filters}=options;
 await this._ensure();
 while(!this._stopped){
 let r;
+const seq=this._seq();
 try{
 r=await this.client.work({
 ...filters,
@@ -1202,7 +1223,7 @@ return;
 }
 continue;
 }
-this._flags(r);
+this._flags(r,seq);
 if(!r.unchanged){
 for(const t of r.claimable??[]){
 yield new WorkItem(t.work??"claim",t);
