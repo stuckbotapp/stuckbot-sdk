@@ -1759,9 +1759,11 @@
                   "execution_target": {
                     "type": "string",
                     "enum": [
-                      "external"
+                      "external",
+                      "runner"
                     ],
-                    "default": "external"
+                    "default": "external",
+                    "description": "external: an agent working on its own. runner: a session started by a customer-run StuckBot Runner."
                   }
                 }
               }
@@ -4880,8 +4882,10 @@
           "execution_target": {
             "type": "string",
             "enum": [
-              "external"
-            ]
+              "external",
+              "runner"
+            ],
+            "description": "external: an agent working on its own. runner: a session started by a customer-run StuckBot Runner."
           }
         }
       },

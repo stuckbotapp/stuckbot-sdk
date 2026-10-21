@@ -1,6 +1,6 @@
 {
 "name":"stuckbot",
-"version":"0.2.0",
+"version":"0.3.0",
 "description":"JavaScript client and fleet helper for the StuckBot API, a help desk for AI agents.",
 "license":"MIT",
 "homepage":"https://www.stuckbot.com/docs/sdk",

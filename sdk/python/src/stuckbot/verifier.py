@@ -9,6 +9,9 @@ Safety rules, in order of importance:
 - Commands run without a shell, in your configured folder, with only the environment you list,
   under a time limit.
 - Only a hash and a short excerpt of the output leave your machine.
+- "prepare" commands may contain {ticket_ref} and {ticket_id}, for example to check out the branch a
+  StuckBot Runner delivered (stuckbot/{ticket_ref}). They are filled in only with values that match
+  SB-<number> and a UUID, so ticket text cannot change what runs.
 """
 from __future__ import annotations
 import argparse
@@ -16,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -26,6 +30,15 @@ from .client import Client
 from .errors import StuckBotError
 log=logging.getLogger("stuckbot.verify")
 EXCERPT=2000
+_REF=re.compile(r"^SB-[0-9]{1,12}$")
+_UUID=re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+def fill(argv:List[str],ticket:Dict[str,Any])->Optional[List[str]]:
+    """argv with {ticket_ref} and {ticket_id} filled in, or None if the ticket's values do not look right."""
+    ref=str(ticket.get("ref") or "")
+    tid=str(ticket.get("id") or "")
+    if not _REF.match(ref) or not _UUID.match(tid):
+        return None
+    return [a.replace("{ticket_ref}",ref).replace("{ticket_id}",tid) for a in argv]
 class Config:
     def __init__(self,data:Dict[str,Any],base:str="."):
         self.key_file=os.path.expanduser(str(data.get("key_file","~/.config/stuckbot/verifier-key.pem")))
@@ -36,6 +49,9 @@ class Config:
         self.allow=[_argv(c) for c in data.get("allow",[])]
         self.prepare=[_argv(c) for c in data.get("prepare",[])]
         self.max_output=int(data.get("max_output_bytes",10*1024*1024))
+        self.sandbox=data.get("sandbox")
+        if self.sandbox not in (None,"bwrap"):
+            raise ValueError("sandbox must be bwrap or left out")
         if not self.allow:
             raise ValueError("the config has no allow list, so the verifier would never run anything")
     @classmethod
@@ -47,10 +63,21 @@ def _argv(cmd:Any)->List[str]:
     if not out or not all(isinstance(x,str) for x in out):
         raise ValueError("bad command in config: %r"%(cmd,))
     return out
-def run_command(argv:List[str],cfg:Config)->Dict[str,Any]:
+def run_command(argv:List[str],cfg:Config,isolate:bool=False)->Dict[str,Any]:
+    """Run one command without a shell. With isolate and sandbox set to bwrap, it runs in a sandbox with no network that sees only the workdir (as /work) and read-only system folders."""
     started=time.time()
+    tmp=None
+    cmd=argv
+    env=cfg.env
+    if isolate and cfg.sandbox=="bwrap":
+        from .runner.sandbox import Bwrap
+        import tempfile
+        tmp=tempfile.mkdtemp(prefix="stuckbot-verify-")
+        box=Bwrap({})
+        env=box.env({**cfg.env,"HOME":"/home/agent"},tmp)
+        cmd=box.wrap(argv,env,tmp,[],work=cfg.workdir)
     try:
-        p=subprocess.run(argv,cwd=cfg.workdir,env=cfg.env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=cfg.timeout,shell=False)
+        p=subprocess.run(cmd,cwd=cfg.workdir,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=cfg.timeout,shell=False)
         out=p.stdout[:cfg.max_output]
         code=p.returncode
         note=""
@@ -62,6 +89,10 @@ def run_command(argv:List[str],cfg:Config)->Dict[str,Any]:
         out=b""
         code=127
         note="could not start: %s\n"%e.strerror
+    finally:
+        if tmp:
+            import shutil
+            shutil.rmtree(tmp,ignore_errors=True)
     text=out.decode("utf-8","replace")
     return {
         "exit_code":code,
@@ -101,7 +132,11 @@ class Verifier:
         except StuckBotError as e:
             log.info("%s: not claimed (%s)",job.get("ticket_ref"),e.code)
             return None
-        for argv in self.cfg.prepare:
+        for raw in self.cfg.prepare:
+            argv=fill(raw,ticket)
+            if argv is None:
+                log.warning("%s: ticket id or ref has an unexpected format; leaving the job",job.get("ticket_ref"))
+                return None
             r=run_command(argv,self.cfg)
             if r["exit_code"]!=0:
                 log.warning("%s: prepare step %s failed with exit %s; leaving the job",job.get("ticket_ref"),argv,r["exit_code"])
@@ -109,7 +144,7 @@ class Verifier:
         evidence=[]
         failed=[]
         for c in todo:
-            r=run_command(c["argv"],self.cfg)
+            r=run_command(c["argv"],self.cfg,isolate=True)
             payload={"command":c["command"],"exit_code":r["exit_code"],"output_sha256":r["output_sha256"],"ran_at":r["ran_at"],"cwd":r["cwd"]}
             if r["output_excerpt"]:
                 payload["output_excerpt"]=r["output_excerpt"]

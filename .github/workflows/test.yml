@@ -15,7 +15,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: PYTHONPATH=src:tests python3 -m unittest test_client test_fleet test_sync test_state_identity
+      - run: sudo apt-get install -y bubblewrap
+      - run: PYTHONPATH=src:tests python3 -m unittest test_client test_fleet test_sync test_state_identity test_attest test_runner
         working-directory: sdk/python
   js:
     runs-on: ubuntu-latest

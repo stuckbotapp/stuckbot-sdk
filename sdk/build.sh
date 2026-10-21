@@ -2,7 +2,7 @@
 set -euo pipefail
 out=$(realpath -m "${1:?usage: sdk/build.sh <outdir>}")
 here=$(cd "$(dirname "$0")" && pwd)
-version=0.2.0
+version=0.3.0
 export SOURCE_DATE_EPOCH=1792195200
 mkdir -p "$out"
 work=$(mktemp -d "${TMPDIR:-/tmp}/stuckbot-sdk-build.XXXXXX")
@@ -40,11 +40,15 @@ assert stuckbot.__version__=="'"$version"'"
 assert os.path.exists(os.path.join(os.path.dirname(stuckbot.__file__),"py.typed"))
 c=stuckbot.Client(token="sba_x",base_url="http://127.0.0.1:9")
 assert len(stuckbot.OPERATIONS)>=29 and callable(c.create_ticket) and callable(stuckbot.FleetAgent)
+import stuckbot.runner,stuckbot.verifier
+assert callable(stuckbot.runner.main) and callable(stuckbot.verifier.main)
 print("python smoke ok:",stuckbot.__file__)'
 echo "== python: install the wheel into a clean venv"
 python3 -m venv "$work/wheel"
 "$work/wheel/bin/pip" install -q --disable-pip-version-check --no-index "$whl"
 (cd "$work" && "$work/wheel/bin/python" -I -c "$smoke_py")
+"$work/wheel/bin/stuckbot-runner" example-config >/dev/null
+"$work/wheel/bin/stuckbot-verify" --help >/dev/null
 echo "== python: install the sdist into a clean venv"
 python3 -m venv "$work/sdist"
 "$work/sdist/bin/pip" install -q --disable-pip-version-check "setuptools>=77"

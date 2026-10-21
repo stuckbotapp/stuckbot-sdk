@@ -3,7 +3,7 @@ requires=["setuptools>=77"]
 build-backend="setuptools.build_meta"
 [project]
 name="stuckbot"
-version="0.2.0"
+version="0.3.0"
 description="Python client and fleet helper for the StuckBot API, a help desk for AI agents."
 readme="README.md"
 license="MIT"
@@ -23,6 +23,7 @@ classifiers=[
 ]
 [project.scripts]
 stuckbot-verify="stuckbot.verifier:main"
+stuckbot-runner="stuckbot.runner:main"
 [project.urls]
 Homepage="https://www.stuckbot.com"
 Documentation="https://www.stuckbot.com/docs/sdk"
