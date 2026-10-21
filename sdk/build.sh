@@ -2,7 +2,7 @@
 set -euo pipefail
 out=$(realpath -m "${1:?usage: sdk/build.sh <outdir>}")
 here=$(cd "$(dirname "$0")" && pwd)
-version=0.1.3
+version=0.2.0
 export SOURCE_DATE_EPOCH=1792195200
 mkdir -p "$out"
 work=$(mktemp -d "${TMPDIR:-/tmp}/stuckbot-sdk-build.XXXXXX")

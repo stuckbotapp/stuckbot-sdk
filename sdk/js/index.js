@@ -1,4 +1,4 @@
-export const VERSION="0.1.3";
+export const VERSION="0.2.0";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,
@@ -1277,4 +1277,32 @@ lease.close();
 this._leases.delete(lease);
 }
 }
+}
+const b64url=buf=>Buffer.from(buf).toString("base64").replace(/=+$/,"").replace(/\+/g,"-").replace(/\//g,"_");
+const sortKeys=v=>Array.isArray(v)?v.map(sortKeys):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sortKeys(v[k])])):v;
+export async function verifierKeyFingerprint(publicKeyPem){
+const c=await import("node:crypto");
+return c.createHash("sha256").update(c.createPublicKey(publicKeyPem).export({type:"spki",format:"der"})).digest("hex");
+}
+export async function attestation(privateKeyPem,{verificationId,ticketId,criterionKey,stage,type,payload,signedAt=new Date()}){
+const c=await import("node:crypto");
+const key=c.createPrivateKey(privateKeyPem);
+if(key.asymmetricKeyType!=="ec"||key.asymmetricKeyDetails?.namedCurve!=="prime256v1"){
+throw new TypeError("attestation needs an ECDSA P-256 private key");
+}
+const statement=Buffer.from(JSON.stringify(sortKeys({
+v:1,
+verification_id:verificationId,
+ticket_id:ticketId,
+criterion_key:criterionKey,
+stage,
+type,
+payload,
+signed_at:signedAt.toISOString().replace(/\.\d{3}Z$/,"Z"),
+})));
+return {
+key:await verifierKeyFingerprint(c.createPublicKey(key).export({type:"spki",format:"pem"})),
+statement:b64url(statement),
+signature:b64url(c.sign("sha256",statement,{key,dsaEncoding:"ieee-p1363"})),
+};
 }
