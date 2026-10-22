@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,19 @@ if mode=="sleep":
     time.sleep(300)
 if mode=="crash":
     sys.exit(3)
+if mode=="private":
+    out=os.environ["OUT"]
+    text=open(os.path.join(out,"prompt.md")).read()
+    files=sorted(os.listdir(os.path.join(out,"ticket-files")))
+    log=open(os.path.join(out,"ticket-files",files[0])).read()
+    if "PRIVATE-CANARY" not in text or "LOG-CANARY" not in log:
+        sys.exit(4)
+    p=os.path.join(os.getcwd(),"calc.py")
+    src=open(p).read()
+    open(p,"w").write(src.replace("a - b","a + b"))
+    json.dump({"outcome":"solved","summary":"saw the private details in "+files[0]},open(os.path.join(out,"result.json"),"w"))
+if mode=="handoff":
+    json.dump({"outcome":"handoff","summary":"needs a db person","handoff":{"title":"db migration stuck","objective":"migrate SECRET-PLAN","stuck_reason":"lock","completed":[],"remaining":["migrate"],"attempts":[],"next_steps":["ask dba"],"context":{"logs":["deadlock"],"workspace":{"repo":"github.com/acme/demo"}},"blocker_criteria":[{"description":"migrated","method":"manual","expected":"done"}],"mode":"blocker_only"}},open(os.path.join(os.environ["OUT"],"result.json"),"w"))
 if mode in ("fix","spend"):
     p=os.path.join(os.getcwd(),"calc.py")
     src=open(p).read()
@@ -51,6 +65,7 @@ class FakeStuckBot:
         self.stop=set()
         self.comments=[]
         self.claim_delay=0.0
+        self.node=""
     @property
     def url(self):
         return self.m.url
@@ -65,7 +80,7 @@ class FakeStuckBot:
         self.tickets[tid]=t
         return t
     def view(self,t,agent=None):
-        return {"id":t["id"],"ref":t["ref"],"state":t["state"],"paused":t["paused"],"root_id":t["root_id"],"depth":t["depth"],"urgency":t["urgency"],"labels":t["labels"],"required_skills":t["required_skills"],
+        return {"private_data":t.get("private_data",{"strict_privacy":False}),"id":t["id"],"ref":t["ref"],"state":t["state"],"paused":t["paused"],"root_id":t["root_id"],"depth":t["depth"],"urgency":t["urgency"],"labels":t["labels"],"required_skills":t["required_skills"],
                 "claim":{"started_at":iso(time.time()),"expires_at":iso(time.time()+1800),"execution_target":t.get("target")} if t["holder"] else None,
                 "you":{"holds_claim":bool(agent and t["holder"]==agent)},
                 "criteria":[{"key":"tests","stage":"blocker","method":"command","evidence_type":"command_run"}],
@@ -89,6 +104,10 @@ class FakeStuckBot:
             return 200,{},{"ok":True,"handoff_requested":None,"stop_requested":{"reason":"person"} if a["id"] in self.stop else None,"retry_after_seconds":60,"token_expires_soon":False}
         if p=="/api/v1/agents/me/retire":
             return 200,{},{"released":[],"waiting":[]}
+        if p=="/api/v1/data-stores":
+            return 200,{},{"data_stores":[{"name":"main","url":self.node}],"projects":[],"grant_keys":""}
+        if p=="/api/v1/data-stores/main/upload-grants":
+            return 200,{},{"store":"main","url":self.node+"/objects/","token":"upload-grant","expires_at":iso(time.time()+600),"max_bytes":1000000,"note":""}
         if p=="/api/v1/work":
             return 200,{},{"claimable":[dict(self.view(t),work="claim") for t in self.tickets.values() if t["state"]=="open"],"updates":[],"retry_after_seconds":1}
         m=re.match(r"^/api/v1/tickets/([^/]+)(/.*)?$",p)
@@ -114,6 +133,12 @@ class FakeStuckBot:
             return 201,{},{"id":"c"}
         if t["holder"]!=a["id"]:
             return err(409,"not_claim_holder")
+        if rest=="/data-grants":
+            return 200,{},{"expires_at":iso(time.time()+300),"note":"","grants":[dict(g,token="grant-"+t["ref"]) for g in t.get("grants",[])]}
+        if rest=="/handoff":
+            t["state"]="handed_off"
+            t["handoff"]=req.json
+            return 201,{},{"ticket":self.view(t,a["id"]),"child":self.view(t,a["id"])}
         if rest=="/claim/renew":
             return 200,{},{"ticket":self.view(t,a["id"])}
         if rest=="/updates":
@@ -179,8 +204,81 @@ class RunnerTest(unittest.TestCase):
         return kinds
     def branch(self,name):
         return subprocess.run(["git","rev-parse","--verify","--quiet","refs/heads/"+name],cwd=self.repo,capture_output=True,text=True).returncode==0
+class FakeNode:
+    """A data store that serves and stores objects for any grant, and records what it saw."""
+    def __init__(self):
+        self.m=Mock()
+        self.m.answer=self.answer
+        self.objects={}
+        self.seen=[]
+    def answer(self,req):
+        self.seen.append((req.method,req.path,req.token))
+        o=req.path.rsplit("/",1)[-1]
+        if req.method=="PUT":
+            if "sha256:"+hashlib.sha256(req.body).hexdigest()!=o:
+                return err(400,"digest_mismatch")
+            self.objects[o]=req.body
+            return 201,{},{"object":o,"size":len(req.body),"created":True}
+        if o not in self.objects:
+            return err(404,"not_found")
+        return 200,{"Content-Type":"application/octet-stream"},self.objects[o]
+    def put(self,data):
+        o="sha256:"+hashlib.sha256(data).hexdigest()
+        self.objects[o]=data
+        return o
 @unittest.skipUnless(HAS_BWRAP,"needs bubblewrap")
 class RunnerFlowTest(RunnerTest):
+    def private_ticket(self,node_url,**kw):
+        node=FakeNode()
+        self.addCleanup(node.m.close)
+        body=json.dumps({"objective":"tests pass","stuck_reason":"PRIVATE-CANARY add() subtracts"}).encode()
+        b=node.put(body)
+        f=node.put(b"LOG-CANARY full log\n")
+        url=node_url or node.m.url
+        t=self.api.post(**kw)
+        t["package"]={"title":"calc bug","mode":"blocker_only","blocker_criteria":t["package"]["blocker_criteria"],"context":{"workspace":{"repo":"github.com/acme/demo"}},"data_refs":[{"store":"main","object":b,"kind":"body"},{"store":"main","object":f,"kind":"file","name":"../build log.txt"}]}
+        t["grants"]=[{"store":"main","object":b,"kind":"body","available":True,"url":url+"/objects/"+b},{"store":"main","object":f,"kind":"file","name":"../build log.txt","available":True,"url":url+"/objects/"+f}]
+        return t,node
+    def test_private_details_are_fetched_after_the_claim_and_given_to_the_session(self):
+        t,node=self.private_ticket(None)
+        cfg=self.config("private")
+        self.run_once(cfg)
+        self.assertEqual(t["state"],"blocker_pending_verification",t.get("release_note"))
+        self.assertIn("saw the private details in 02-build_log.txt",t["updates"][0]["body"])
+        rests=[r for _,r,_ in t["events"]]
+        self.assertLess(rests.index("/claim"),rests.index("/data-grants"))
+        self.assertTrue(all(tok=="grant-SB-1" for _,_,tok in node.seen))
+        kinds=self.audit(cfg)
+        self.assertLess(kinds.index("private_data_fetched"),kinds.index("session_started"))
+    def test_an_unreachable_data_store_gives_the_ticket_back_without_a_session(self):
+        port=socket.socket()
+        port.bind(("127.0.0.1",0))
+        dead="http://127.0.0.1:%d"%port.getsockname()[1]
+        port.close()
+        t,_=self.private_ticket(dead)
+        cfg=self.config("fix")
+        self.run_once(cfg)
+        self.assertEqual(t["state"],"open")
+        self.assertIn("could not fetch this ticket's details from its data store",t["release_note"])
+        kinds=self.audit(cfg)
+        self.assertIn("private_data_failed",kinds)
+        self.assertNotIn("session_started",kinds)
+    def test_a_strict_handoff_keeps_its_details_on_the_data_store(self):
+        t,node=self.private_ticket(None)
+        self.api.node=node.m.url
+        t["private_data"]={"strict_privacy":True}
+        cfg=self.config("handoff")
+        self.run_once(cfg)
+        self.assertIn("handoff",t,t.get("release_note"))
+        h=t["handoff"]["package"]
+        self.assertNotIn("objective",h)
+        self.assertEqual(h["context"],{"workspace":{"repo":"github.com/acme/demo"}})
+        ref=h["data_refs"][0]
+        self.assertEqual((ref["kind"],ref["store"]),("body","main"))
+        sealed=json.loads(node.objects[ref["object"]])
+        self.assertEqual(sealed["objective"],"migrate SECRET-PLAN")
+        self.assertEqual(sealed["context"],{"logs":["deadlock"]})
+        self.assertNotIn("SECRET-PLAN",json.dumps(t["handoff"]))
     def test_claims_before_spawning_and_submits_runner_checked_evidence(self):
         t=self.api.post()
         cfg=self.config("fix")

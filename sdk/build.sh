@@ -2,7 +2,7 @@
 set -euo pipefail
 out=$(realpath -m "${1:?usage: sdk/build.sh <outdir>}")
 here=$(cd "$(dirname "$0")" && pwd)
-version=0.3.0
+version=0.4.0
 export SOURCE_DATE_EPOCH=1792195200
 mkdir -p "$out"
 work=$(mktemp -d "${TMPDIR:-/tmp}/stuckbot-sdk-build.XXXXXX")
@@ -40,8 +40,8 @@ assert stuckbot.__version__=="'"$version"'"
 assert os.path.exists(os.path.join(os.path.dirname(stuckbot.__file__),"py.typed"))
 c=stuckbot.Client(token="sba_x",base_url="http://127.0.0.1:9")
 assert len(stuckbot.OPERATIONS)>=29 and callable(c.create_ticket) and callable(stuckbot.FleetAgent)
-import stuckbot.runner,stuckbot.verifier
-assert callable(stuckbot.runner.main) and callable(stuckbot.verifier.main)
+import stuckbot.runner,stuckbot.verifier,stuckbot.datanode
+assert callable(stuckbot.runner.main) and callable(stuckbot.verifier.main) and callable(stuckbot.datanode.main) and callable(stuckbot.merge_body)
 print("python smoke ok:",stuckbot.__file__)'
 echo "== python: install the wheel into a clean venv"
 python3 -m venv "$work/wheel"
@@ -49,6 +49,7 @@ python3 -m venv "$work/wheel"
 (cd "$work" && "$work/wheel/bin/python" -I -c "$smoke_py")
 "$work/wheel/bin/stuckbot-runner" example-config >/dev/null
 "$work/wheel/bin/stuckbot-verify" --help >/dev/null
+"$work/wheel/bin/stuckbot-datanode" example-config >/dev/null
 echo "== python: install the sdist into a clean venv"
 python3 -m venv "$work/sdist"
 "$work/sdist/bin/pip" install -q --disable-pip-version-check "setuptools>=77"
@@ -63,8 +64,8 @@ mkdir "$work/npm"
 (cd "$work/npm" && npm init -y >/dev/null && npm install --silent --no-audit --no-fund "$tgz")
 test -f "$work/npm/node_modules/stuckbot/index.d.ts"
 (cd "$work/npm" && node --input-type=module -e '
-import {Client,FleetAgent,OPERATIONS,StuckBotError,VERSION} from "stuckbot";
-if(VERSION!=="'"$version"'"||Object.keys(OPERATIONS).length<29||typeof new Client({token:"x"}).createTicket!=="function"||typeof FleetAgent!=="function"||!(new StuckBotError(409,"x","y") instanceof Error)){
+import {Client,FleetAgent,OPERATIONS,StuckBotError,VERSION,mergeBody} from "stuckbot";
+if(typeof mergeBody!=="function"||typeof new Client({token:"x"}).putData!=="function"||VERSION!=="'"$version"'"||Object.keys(OPERATIONS).length<29||typeof new Client({token:"x"}).createTicket!=="function"||typeof FleetAgent!=="function"||!(new StuckBotError(409,"x","y") instanceof Error)){
 throw new Error("js smoke failed");
 }
 console.log("js smoke ok:",import.meta.resolve("stuckbot"));

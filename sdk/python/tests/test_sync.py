@@ -41,6 +41,10 @@ CALLS={
 "get_openapi":lambda c:c.get_openapi(),
 "api_index":lambda c:c.api_index(),
 "get_handoff_package_schema":lambda c:c.get_handoff_package_schema(),
+"get_data_grants":lambda c:c.get_data_grants(T),
+"list_data_stores":lambda c:c.list_data_stores(),
+"get_upload_grant":lambda c:c.get_upload_grant("main"),
+"get_grant_keys":lambda c:c.get_grant_keys(),
 }
 class Recorder(Client):
     def __init__(self):

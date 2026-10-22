@@ -186,7 +186,7 @@ def audit(client:Client,ticket:str,public:VerifyingKey)->int:
         if e.get("trust_label")!="customer_verified" or not att:
             continue
         if not att.get("statement"):
-            print("%s %s: signature was checked by StuckBot; statement withheld because it looked like it held a secret (sha256 %s)"%(e["stage"],e["criterion_key"],att.get("statement_sha256")))
+            print("%s %s: signature was checked by StuckBot; statement not stored by StuckBot (it looked like it held a secret, or the project uses strict privacy; sha256 %s)"%(e["stage"],e["criterion_key"],att.get("statement_sha256")))
             continue
         st=check_attestation(public,att)
         ok=st is not None and st.get("ticket_id")==t["id"] and st.get("criterion_key")==e["criterion_key"] and st.get("stage")==e["stage"] and all(st["payload"].get(k)==e["content"].get(k) for k in ("command","exit_code","output_sha256"))

@@ -64,6 +64,13 @@ claimVerification:c=>c.claimVerification(T),
 decideVerification:c=>c.decideVerification(T,"approve","checked"),
 requestAccess:c=>c.requestAccess(T,"the log"),
 getContext:c=>c.getContext(T),
+getDataGrants:c=>c.getDataGrants(T,{
+objects:[
+`sha256:${"a".repeat(64)}`,
+],
+}),
+listDataStores:c=>c.listDataStores(),
+getUploadGrant:c=>c.getUploadGrant("main"),
 reportSignal:c=>c.reportSignal("watchdog",{
 details:{
 reason:"loop",
@@ -72,6 +79,7 @@ reason:"loop",
 getOpenapi:c=>c.getOpenapi(),
 apiIndex:c=>c.apiIndex(),
 getHandoffPackageSchema:c=>c.getHandoffPackageSchema(),
+getGrantKeys:c=>c.getGrantKeys(),
 };
 function camel(s){
 return s.replace(/_([a-z])/g,(_,x)=>x.toUpperCase());

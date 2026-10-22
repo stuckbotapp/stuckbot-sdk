@@ -1,4 +1,4 @@
-export const VERSION="0.3.0";
+export const VERSION="0.4.0";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,
@@ -58,10 +58,14 @@ claimVerification:["POST","/api/v1/verifications/{id}/claim"],
 decideVerification:["POST","/api/v1/verifications/{id}/decision"],
 requestAccess:["POST","/api/v1/tickets/{id}/access-requests"],
 getContext:["GET","/api/v1/tickets/{id}/context"],
+getDataGrants:["POST","/api/v1/tickets/{id}/data-grants"],
+listDataStores:["GET","/api/v1/data-stores"],
+getUploadGrant:["POST","/api/v1/data-stores/{name}/upload-grants"],
 reportSignal:["POST","/api/v1/signals"],
 getOpenapi:["GET","/api/v1/openapi.json"],
 apiIndex:["GET","/api/v1"],
 getHandoffPackageSchema:["GET","/schemas/handoff-package-1.json"],
+getGrantKeys:["GET","/.well-known/stuckbot-grant-keys.json"],
 };
 const REF=/^[A-Za-z0-9-]{1,64}$/;
 function env(name){
@@ -234,6 +238,39 @@ return new ClaimLostError(err.status,err.code,err.message,err);
 return null;
 }
 }
+export class PrivateData{
+constructor(ref,data,reason){
+this.ref=ref;
+this.data=data;
+this.reason=reason;
+}
+get kind(){
+return this.ref.kind??null;
+}
+get name(){
+return this.ref.name??null;
+}
+json(){
+return this.data===null?null:JSON.parse(new TextDecoder().decode(this.data));
+}
+}
+export function mergeBody(pkg,body){
+if(!body||typeof body!=="object"||Array.isArray(body)){
+throw new TypeError("the body on the data store is not a JSON object");
+}
+const {context,...hosted}=pkg;
+const out={
+...body,
+...hosted,
+};
+if("context" in pkg||"context" in body){
+out.context={
+...body.context,
+...context,
+};
+}
+return out;
+}
 export class Client{
 constructor(options={}){
 this.token=options.token!==undefined?options.token:env("STUCKBOT_TOKEN");
@@ -382,7 +419,7 @@ throw err;
 }
 _op(name,id,options={},what="ticket"){
 const [method,template]=OPERATIONS[name];
-const path=id===undefined?template:template.replace("{id}",encodeURIComponent(ref(id,what)));
+const path=id===undefined?template:template.replace(/\{\w+\}/,encodeURIComponent(ref(id,what)));
 return this.request(method,path,options);
 }
 async _take(name,ticket,options){
@@ -725,6 +762,110 @@ idempotencyKey:options.idempotencyKey,
 getContext(ticket){
 return this._op("getContext",ticket);
 }
+getDataGrants(ticket,options={}){
+return this._op("getDataGrants",ticket,{
+body:clean({
+objects:options.objects,
+}),
+idempotencyKey:options.idempotencyKey,
+});
+}
+listDataStores(){
+return this._op("listDataStores");
+}
+getUploadGrant(store,options={}){
+return this._op("getUploadGrant",store,{
+body:{},
+idempotencyKey:options.idempotencyKey,
+},"data store");
+}
+async _node(method,url,token,data){
+let u;
+try{
+u=new URL(url);
+}catch{
+}
+if(u?.protocol!=="https:"&&u?.protocol!=="http:"){
+throw new TypeError(`data store url must be http or https, got ${JSON.stringify(url)}`);
+}
+const h={
+"Authorization":`Bearer ${token}`,
+"User-Agent":this.userAgent,
+};
+if(data!==undefined){
+h["Content-Type"]="application/octet-stream";
+}
+let res;
+let out;
+try{
+res=await this.fetch(u.href,{
+method,
+headers:h,
+body:data,
+redirect:"manual",
+signal:AbortSignal.timeout(this.timeout),
+});
+if(res.type!=="opaqueredirect"&&res.status<300){
+return new Uint8Array(await res.arrayBuffer());
+}
+out=await res.text();
+}catch(err){
+throw new StuckBotError(0,"data_store_unreachable",`Could not reach the data store at ${u.origin}: ${err?.message??err}`);
+}
+let e={};
+try{
+const body=JSON.parse(out);
+if(body&&typeof body.error==="object"&&body.error){
+e=body.error;
+}
+}catch{
+}
+throw new StuckBotError(res.status,e.code??"data_store_error",e.message??`The data store answered ${res.status}.`);
+}
+async putData(store,data,options={}){
+let mediaType=options.mediaType;
+let bytes;
+if(typeof data==="string"){
+bytes=new TextEncoder().encode(data);
+}else if(data instanceof ArrayBuffer){
+bytes=new Uint8Array(data);
+}else if(ArrayBuffer.isView(data)){
+bytes=new Uint8Array(data.buffer,data.byteOffset,data.byteLength);
+}else if(typeof Blob==="function"&&data instanceof Blob){
+bytes=new Uint8Array(await data.arrayBuffer());
+}else{
+bytes=new TextEncoder().encode(JSON.stringify(data));
+mediaType??="application/json";
+}
+const g=await this.getUploadGrant(store);
+const object=`sha256:${await sha256Hex(bytes)}`;
+await this._node("PUT",g.url+object,g.token,bytes);
+return clean({
+store:g.store,
+object,
+kind:options.kind??"file",
+name:options.name,
+size:bytes.length,
+media_type:mediaType,
+});
+}
+async getData(ticket,options={}){
+const out=[];
+for(const g of (await this.getDataGrants(ticket,{
+objects:options.objects,
+})).grants){
+if(!g.available){
+out.push(new PrivateData(g,null,g.reason??null));
+continue;
+}
+const data=await this._node("GET",g.url,g.token);
+if(`sha256:${await sha256Hex(data)}`!==g.object){
+throw new StuckBotError(0,"digest_mismatch",`The data store returned bytes that do not match ${g.object}.`);
+}
+out.push(new PrivateData(g,data,null));
+}
+return out;
+}
 reportSignal(type,options={}){
 return this._op("reportSignal",undefined,{
 body:clean({
@@ -745,6 +886,9 @@ return this._op("apiIndex");
 }
 getHandoffPackageSchema(){
 return this._op("getHandoffPackageSchema");
+}
+getGrantKeys(){
+return this._op("getGrantKeys");
 }
 }
 export class WorkItem{

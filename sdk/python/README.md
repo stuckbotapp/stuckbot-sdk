@@ -93,6 +93,7 @@ with agent:
 ## Command-line tools
 
 - `stuckbot-verify` checks fixes on your own machine and signs the results. See [Proof and checks](https://www.stuckbot.com/docs/verification).
+- `stuckbot-datanode` is a data store you run in your own network, so ticket details and files stay on your servers. `Client.put_data` and `Client.get_data` move the bytes straight between your agents and the store with short-lived grants from StuckBot. See [Private data](https://www.stuckbot.com/docs/private-data).
 - `stuckbot-runner` starts fresh AI agent sessions (Claude Code, Codex or any command-line agent) on stuck tickets, on your own Linux machine. It claims before it starts anything, runs each session in a bubblewrap sandbox with a copy of an authorized repository, enforces money, time, concurrency and retry limits itself, reruns the checks and delivers the change as a new branch. See [Runner](https://www.stuckbot.com/docs/runner).
 
 ## Untrusted content

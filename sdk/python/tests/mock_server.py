@@ -58,6 +58,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection=True
     do_GET=handle_one
     do_POST=handle_one
+    do_PUT=handle_one
 class Mock:
     def __init__(self):
         self.routes={}
