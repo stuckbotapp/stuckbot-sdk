@@ -2,7 +2,7 @@
 set -euo pipefail
 out=$(realpath -m "${1:?usage: sdk/build.sh <outdir>}")
 here=$(cd "$(dirname "$0")" && pwd)
-version=0.4.0
+version=0.5.0
 export SOURCE_DATE_EPOCH=1792195200
 mkdir -p "$out"
 work=$(mktemp -d "${TMPDIR:-/tmp}/stuckbot-sdk-build.XXXXXX")
@@ -50,6 +50,7 @@ python3 -m venv "$work/wheel"
 "$work/wheel/bin/stuckbot-runner" example-config >/dev/null
 "$work/wheel/bin/stuckbot-verify" --help >/dev/null
 "$work/wheel/bin/stuckbot-datanode" example-config >/dev/null
+"$work/wheel/bin/stuckbot-datanode" keys example-config >/dev/null
 echo "== python: install the sdist into a clean venv"
 python3 -m venv "$work/sdist"
 "$work/sdist/bin/pip" install -q --disable-pip-version-check "setuptools>=77"

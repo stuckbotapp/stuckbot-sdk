@@ -1,4 +1,4 @@
-export const VERSION="0.4.0";
+export const VERSION="0.5.0";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,

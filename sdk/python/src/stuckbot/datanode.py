@@ -95,6 +95,7 @@ EXAMPLE={
 }
 class Grants:
     """Checks StuckBot data grants for one store."""
+    max_lifetime=MAX_LIFETIME
     def __init__(self,cfg:Config,keys:Optional[Dict[str,VerifyingKey]]=None,now=time.time):
         self.cfg=cfg
         self.now=now
@@ -141,6 +142,9 @@ class Grants:
         if obj is not None and act=="read" and obj not in (claims.get("obj") or []):
             raise GrantError(403,"wrong_object","This grant does not cover that object.")
         return claims
+    def _audience(self,claims:Dict[str,Any]):
+        if claims.get("aud")!="stuckbot-data:"+self.cfg.store_id or claims.get("store")!=self.cfg.store_id:
+            raise GrantError(403,"wrong_store","The grant is for another data store.")
     def _verify(self,token:str)->Dict[str,Any]:
         parts=token.split(".")
         if len(parts)!=3:
@@ -166,13 +170,12 @@ class Grants:
                 raise GrantError(401,"bad_grant",f"The grant has no {k}.")
         if claims.get("iss")!=self.cfg.issuer:
             raise GrantError(403,"wrong_issuer","The grant was issued by someone else.")
-        if claims.get("aud")!="stuckbot-data:"+self.cfg.store_id or claims.get("store")!=self.cfg.store_id:
-            raise GrantError(403,"wrong_store","The grant is for another data store.")
+        self._audience(claims)
         if claims.get("org")!=self.cfg.org_id:
             raise GrantError(403,"wrong_org","The grant is for another org.")
         if claims["nbf"]>now+SKEW or claims["iat"]>now+SKEW:
             raise GrantError(401,"grant_not_yet_valid","The grant is not valid yet. Check this machine's clock.")
-        if claims["exp"]-claims["iat"]>MAX_LIFETIME:
+        if claims["exp"]-claims["iat"]>self.max_lifetime:
             raise GrantError(401,"bad_grant","The grant lives longer than this node accepts.")
         if claims["exp"]<=now-SKEW:
             raise GrantError(401,"grant_expired","This grant expired. Ask StuckBot for a new one.")
@@ -345,6 +348,7 @@ class Server(socketserver.ThreadingMixIn,http.server.HTTPServer):
     daemon_threads=True
     allow_reuse_address=True
 class Node:
+    handler=Handler
     def __init__(self,cfg:Config,grants:Optional[Grants]=None):
         self.cfg=cfg
         self.grants=grants or Grants(cfg)
@@ -363,7 +367,7 @@ class Node:
                 f.write(json.dumps(line)+"\n")
     def server(self)->Server:
         host,_,port=self.cfg.listen.rpartition(":")
-        handler=type("BoundHandler",(Handler,),{"node":self})
+        handler=type("BoundHandler",(self.handler,),{"node":self})
         srv=Server((host.strip("[]") or "127.0.0.1",int(port)),handler)
         if self.cfg.tls_cert:
             ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -371,6 +375,21 @@ class Node:
             ctx.load_cert_chain(self.cfg.tls_cert,self.cfg.tls_key)
             srv.socket=ctx.wrap_socket(srv.socket,server_side=True)
         return srv
+def pin_keys(cfg)->int:
+    if not cfg.keys_file:
+        print("set keys_file in the config first",file=sys.stderr)
+        return 2
+    data=fetch_jwks(cfg.issuer)
+    keys=keys_from_jwks(data)
+    if not keys:
+        print("StuckBot returned no usable keys",file=sys.stderr)
+        return 1
+    os.makedirs(os.path.dirname(cfg.keys_file),exist_ok=True)
+    with open(cfg.keys_file+".tmp","w") as f:
+        json.dump(data,f,indent=2)
+    os.replace(cfg.keys_file+".tmp",cfg.keys_file)
+    print("pinned keys %s in %s"%(", ".join(sorted(keys)),cfg.keys_file))
+    return 0
 def main(argv=None)->int:
     ap=argparse.ArgumentParser(prog="stuckbot-datanode",description="Keep StuckBot ticket content on your own servers.")
     sub=ap.add_subparsers(dest="cmd",required=True)
@@ -385,26 +404,18 @@ def main(argv=None)->int:
     p.add_argument("--kind",choices=["body","file"],default="file")
     p.add_argument("--name")
     sub.add_parser("example-config",help="print an example config")
+    k=sub.add_parser("keys",help="run a key service that holds your org's own encryption key (see stuckbot-datanode keys -h)",add_help=False)
+    k.add_argument("rest",nargs=argparse.REMAINDER)
     a=ap.parse_args(argv)
+    if a.cmd=="keys":
+        from .keyservice import main as keys_main
+        return keys_main(a.rest)
     if a.cmd=="example-config":
         print(json.dumps(EXAMPLE,indent=2))
         return 0
     cfg=Config.load(a.config)
     if a.cmd=="trust":
-        if not cfg.keys_file:
-            print("set keys_file in the config first",file=sys.stderr)
-            return 2
-        data=fetch_jwks(cfg.issuer)
-        keys=keys_from_jwks(data)
-        if not keys:
-            print("StuckBot returned no usable keys",file=sys.stderr)
-            return 1
-        os.makedirs(os.path.dirname(cfg.keys_file),exist_ok=True)
-        with open(cfg.keys_file+".tmp","w") as f:
-            json.dump(data,f,indent=2)
-        os.replace(cfg.keys_file+".tmp",cfg.keys_file)
-        print("pinned keys %s in %s"%(", ".join(sorted(keys)),cfg.keys_file))
-        return 0
+        return pin_keys(cfg)
     if a.cmd=="put":
         with open(a.file,"rb") as f:
             data=f.read()

@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any,Callable,Dict,Iterator,List,Optional,Union
 from .errors import ClaimLost,StuckBotError,parse_retry_after
-VERSION="0.4.0"
+VERSION="0.5.0"
 DEFAULT_BASE_URL="https://www.stuckbot.com"
 RETRY_STATUSES=(429,502,503,504)
 AUTH_CODES=("invalid_token","token_expired","token_revoked")

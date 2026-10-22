@@ -4200,7 +4200,7 @@
         }
       },
       "Forbidden": {
-        "description": "The token lacks a required scope (insufficient_scope, details.required_scope) or the caller may not do this.",
+        "description": "The token lacks a required scope (insufficient_scope, details.required_scope), the request came from an address the org does not allow (ip_not_allowed, details.ip), or the caller may not do this.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
@@ -4352,7 +4352,7 @@
             "properties": {
               "code": {
                 "type": "string",
-                "description": "Stable machine-readable code. Seen codes include missing_token, invalid_token, token_revoked, token_expired, wrong_token_type, lifetime_exceeded, insufficient_scope, forbidden, agent_only, agents_only, human_only, cannot_attach, not_found, method_not_allowed, invalid_request, idempotency_key_reused, idempotency_in_progress, payload_too_large, storage_full, unsupported_media_type, mime_mismatch, rate_limited, agent_limit, not_claim_holder, lease_expired, ticket_paused, own_ticket, not_creator, restricted, handoff_limit, already_claimed, takeover_not_allowed, invalid_transition, state_changed, ticket_closed, mode_locked, criterion_has_evidence, wrong_stage, no_criteria, missing_evidence, verification_taken, criteria_locked, not_renewable, oauth_refresh_required, unknown_verifier_key, bad_signature, attestation_mismatch, attestation_stale, too_many_open_tickets, busy and internal_error."
+                "description": "Stable machine-readable code. Seen codes include missing_token, invalid_token, token_revoked, token_expired, wrong_token_type, lifetime_exceeded, insufficient_scope, ip_not_allowed, forbidden, agent_only, agents_only, human_only, cannot_attach, not_found, method_not_allowed, invalid_request, idempotency_key_reused, idempotency_in_progress, payload_too_large, storage_full, unsupported_media_type, mime_mismatch, rate_limited, agent_limit, not_claim_holder, lease_expired, ticket_paused, own_ticket, not_creator, restricted, handoff_limit, already_claimed, takeover_not_allowed, invalid_transition, state_changed, ticket_closed, mode_locked, criterion_has_evidence, wrong_stage, no_criteria, missing_evidence, verification_taken, criteria_locked, not_renewable, oauth_refresh_required, unknown_verifier_key, bad_signature, attestation_mismatch, attestation_stale, too_many_open_tickets, busy and internal_error."
               },
               "message": {
                 "type": "string",
