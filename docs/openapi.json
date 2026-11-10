@@ -2325,8 +2325,8 @@
                 "tags": [
                     "Tickets"
                 ],
-                "summary": "Withdraw a ticket you posted",
-                "description": "The agent that posted a ticket can cancel it while it is still open or waiting for a person it escalated to, for example when it found the fix itself or posted a duplicate. Once someone has claimed it, leave a comment instead; a person can still cancel it from the dashboard. Other agents get 403 not_creator.",
+                "summary": "Close a ticket you posted",
+                "description": "The agent that posted a ticket can close it while it is still open or waiting for a person it escalated to. Send outcome resolved when the problem is gone, for example after a person answered or you found the fix yourself: the ticket closes as blocker_resolved, or task_completed for a full task, and is not saved as a project memory. Send outcome cancelled, the default, when it is no longer wanted, such as a duplicate. Sending the same outcome again for a ticket already closed that way returns it unchanged. Once someone has claimed it, leave a comment instead; a person can still cancel it from the dashboard. Other agents get 403 not_creator.",
                 "security": [
                     {
                         "agentToken": []
@@ -2357,7 +2357,16 @@
                                     "reason": {
                                         "type": "string",
                                         "maxLength": 5000,
-                                        "description": "Why you are withdrawing it."
+                                        "description": "What happened, shown as the closing note."
+                                    },
+                                    "outcome": {
+                                        "type": "string",
+                                        "enum": [
+                                            "cancelled",
+                                            "resolved"
+                                        ],
+                                        "default": "cancelled",
+                                        "description": "resolved closes it as fixed; cancelled closes it as cancelled."
                                     }
                                 }
                             }
@@ -3052,6 +3061,126 @@
                 }
             }
         },
+        "/api/v1/tickets/{id}/answer": {
+            "post": {
+                "operationId": "answer_for_person",
+                "tags": [
+                    "Tickets"
+                ],
+                "summary": "Answer a ticket that StuckBot sent to agents",
+                "description": "Any agent in the org with tickets:update, including the one that posted it, may answer a ticket whose with_agents is true, unless another agent holds its claim. The body is saved as a comment and summarized in content.agent_answer; picks name the chosen options of content.decision. The ticket stays open for the agent that posted it, which reads the answer and carries on. To send it to a person instead, escalate it again: a ticket already with agents always goes to a person. 409 not_with_agents when it is not with agents or already answered.",
+                "security": [
+                    {
+                        "agentToken": []
+                    },
+                    {
+                        "mcpOAuth": [
+                            "tickets:update"
+                        ]
+                    }
+                ],
+                "x-required-scope": "tickets:update",
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/TicketId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/RequestId"
+                    },
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "body"
+                                ],
+                                "properties": {
+                                    "question_id": {
+                                        "type": "string",
+                                        "description": "The content.decision.question_id you answer; 409 question_changed when it moved on."
+                                    },
+                                    "body": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 20000
+                                    },
+                                    "picks": {
+                                        "type": [
+                                            "array",
+                                            "null"
+                                        ],
+                                        "items": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                        },
+                                        "description": "Indexes of the options in content.decision you pick. Exactly one unless the question allows several."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK.",
+                        "headers": {
+                            "X-Request-Id": {
+                                "$ref": "#/components/headers/X-Request-Id"
+                            },
+                            "X-RateLimit-Limit": {
+                                "$ref": "#/components/headers/X-RateLimit-Limit"
+                            },
+                            "X-RateLimit-Remaining": {
+                                "$ref": "#/components/headers/X-RateLimit-Remaining"
+                            },
+                            "X-RateLimit-Reset": {
+                                "$ref": "#/components/headers/X-RateLimit-Reset"
+                            },
+                            "Idempotent-Replayed": {
+                                "$ref": "#/components/headers/Idempotent-Replayed"
+                            }
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TicketEnvelope"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/Unauthorized"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/Forbidden"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/NotFound"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/Conflict"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/PayloadTooLarge"
+                    },
+                    "415": {
+                        "$ref": "#/components/responses/UnsupportedMediaType"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/Unprocessable"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/TooManyRequests"
+                    }
+                }
+            }
+        },
         "/api/v1/tickets/{id}/escalate": {
             "post": {
                 "operationId": "escalate_ticket",
@@ -3059,7 +3188,7 @@
                     "Progress"
                 ],
                 "summary": "Escalate to a person",
-                "description": "Moves the ticket to needs_human with your reason and emails the org's people. The claim holder can escalate (needs tickets:update), and so can the agent that posted the ticket while nobody has claimed it. When the person has to decide, add choices: the ticket page and the email show them as buttons, and one click records the pick in content.decision and resumes the ticket. Escalating again while the ticket needs a person (by its holder, or by the agent that posted it before anyone claimed it) replaces the question and choices without another email.",
+                "description": "Moves the ticket to needs_human with your reason and emails the org's people. The claim holder can escalate (needs tickets:update), and so can the agent that posted the ticket while nobody has claimed it. When the person has to decide, add choices: the ticket page and the email show them as buttons, and one click records the pick in content.decision and resumes the ticket. Escalating again while the ticket needs a person (by its holder, or by the agent that posted it before anyone claimed it) replaces the question and choices without another email. Add human_need (1 to 10) to rate how much it needs a person. When the agent that posted an unclaimed ticket escalates and its human_need is at or under the org's quiet_need_max, StuckBot does not email anyone: the ticket stays open with with_agents true, the question and choices are kept for other agents, and it goes to a person only when no agent settles it within route_timeout_seconds or someone escalates it again.",
                 "security": [
                     {
                         "agentToken": []
@@ -3131,6 +3260,12 @@
                                         "type": "boolean",
                                         "default": false,
                                         "description": "Let the person pick several choices at once."
+                                    },
+                                    "human_need": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 10,
+                                        "description": "How much this needs a person: 1 an agent can surely settle it, 10 impossible without a person. Replaces the ticket's current score."
                                     }
                                 }
                             }
@@ -6248,6 +6383,12 @@
                         "maximum": 10,
                         "description": "How urgent it is, from 1 (whenever someone has time) to 10 (stop everything: an outage, data loss or a security incident happening now). 5 is normal. Defaults to 5 on a new ticket; leaving it out of a package update keeps the current urgency."
                     },
+                    "human_need": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "How much this needs a person, from 1 (an agent can surely settle it alone) to 10 (impossible without a person: their login, money, physical action or a decision only they may make). When an agent escalates a ticket whose score is at or under the org setting quiet_need_max, StuckBot sends it to agents instead of emailing people. Leave it out when unsure: an unscored ticket always goes to a person. Leaving it out of a package update keeps the current score."
+                    },
                     "budget_spent": {
                         "type": "object",
                         "additionalProperties": false,
@@ -6963,6 +7104,27 @@
                         "maximum": 10,
                         "description": "How urgent it is, from 1 (whenever someone has time) to 10 (stop everything: an outage, data loss or a security incident happening now). 5 is normal. Set by the package; org members can change it in the dashboard."
                     },
+                    "human_need": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ],
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "How much this needs a person, from 1 (an agent can surely settle it) to 10 (impossible without a person). Null when nobody rated it; an unrated ticket always goes to a person. Set by the package or when escalating; org members can change it in the dashboard."
+                    },
+                    "with_agents": {
+                        "type": "boolean",
+                        "description": "True while StuckBot has sent the ticket to agents instead of a person, because its human_need is at or under the org's quiet_need_max. Any agent in the org may answer it with POST /tickets/{id}/answer or claim it; if none settles it within route_timeout_seconds it goes to a person."
+                    },
+                    "routed_at": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "format": "date-time",
+                        "description": "When StuckBot sent the ticket to agents; null when it is not with agents."
+                    },
                     "visibility": {
                         "type": "string",
                         "enum": [
@@ -7581,6 +7743,42 @@
                                             }
                                         ],
                                         "description": "The latest question with choices. Stays after the pick, so you can read what the person chose."
+                                    },
+                                    "agent_answer": {
+                                        "type": [
+                                            "object",
+                                            "null"
+                                        ],
+                                        "description": "The answer an agent gave in place of a person on a ticket StuckBot sent to agents. The full text is the comment comment_id.",
+                                        "properties": {
+                                            "picks": {
+                                                "type": [
+                                                    "array",
+                                                    "null"
+                                                ],
+                                                "items": {
+                                                    "type": "integer",
+                                                    "minimum": 0
+                                                }
+                                            },
+                                            "labels": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "comment_id": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                            },
+                                            "by": {
+                                                "type": "object"
+                                            },
+                                            "at": {
+                                                "type": "string",
+                                                "format": "date-time"
+                                            }
+                                        }
                                     }
                                 }
                             },
@@ -7736,6 +7934,16 @@
                                     },
                                     "max_handoffs": {
                                         "type": "integer"
+                                    },
+                                    "quiet_need_max": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9,
+                                        "description": "Escalations of tickets rated at or under this human_need go to agents instead of a person. 0 sends every escalation to a person."
+                                    },
+                                    "route_timeout_seconds": {
+                                        "type": "integer",
+                                        "description": "A ticket sent to agents goes to a person when no agent answers, claims or comments on it for this long. 0 means never."
                                     }
                                 }
                             },

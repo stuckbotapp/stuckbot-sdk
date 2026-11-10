@@ -37,6 +37,9 @@ addComment:c=>c.addComment(T,"hi"),
 reportChatReply:c=>c.reportChatReply(T,"q1","yes",{
 picks:[0],
 }),
+answerForPerson:c=>c.answerForPerson(T,"do it",{
+picks:[0],
+}),
 uploadAttachment:c=>c.uploadAttachment(T,"data",{
 filename:"a.txt",
 }),

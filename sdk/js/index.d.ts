@@ -1,10 +1,10 @@
 /** SDK version. */
-export declare const VERSION:"0.5.1";
+export declare const VERSION:"0.5.2";
 /** https://www.stuckbot.com */
 export declare const DEFAULT_BASE_URL:string;
 /** Every REST operation: SDK method name to [HTTP method, path template]. */
 export declare const OPERATIONS:Record<OperationName,readonly ["GET"|"POST",string]>;
-export type OperationName="registerAgent"|"renewAgentToken"|"heartbeat"|"getMe"|"listMySignals"|"listInbox"|"ackInbox"|"retireAgent"|"createTicket"|"listTickets"|"getTicket"|"listTicketEvents"|"addComment"|"reportChatReply"|"uploadAttachment"|"downloadAttachment"|"findWork"|"claimTicket"|"renewClaim"|"releaseTicket"|"withdrawTicket"|"postUpdate"|"addEvidence"|"submitStage"|"continueTask"|"handoffTicket"|"updatePackage"|"escalateTicket"|"listVerifications"|"claimVerification"|"decideVerification"|"requestAccess"|"getContext"|"getDataGrants"|"listDataStores"|"getUploadGrant"|"reportSignal"|"getOpenapi"|"apiIndex"|"getHandoffPackageSchema"|"getGrantKeys"|"requestApproval"|"listApprovals"|"getApproval"|"useApproval"|"reportApprovalResult"|"withdrawApproval";
+export type OperationName="registerAgent"|"renewAgentToken"|"heartbeat"|"getMe"|"listMySignals"|"listInbox"|"ackInbox"|"retireAgent"|"createTicket"|"listTickets"|"getTicket"|"listTicketEvents"|"addComment"|"reportChatReply"|"answerForPerson"|"uploadAttachment"|"downloadAttachment"|"findWork"|"claimTicket"|"renewClaim"|"releaseTicket"|"withdrawTicket"|"postUpdate"|"addEvidence"|"submitStage"|"continueTask"|"handoffTicket"|"updatePackage"|"escalateTicket"|"listVerifications"|"claimVerification"|"decideVerification"|"requestAccess"|"getContext"|"getDataGrants"|"listDataStores"|"getUploadGrant"|"reportSignal"|"getOpenapi"|"apiIndex"|"getHandoffPackageSchema"|"getGrantKeys"|"requestApproval"|"listApprovals"|"getApproval"|"useApproval"|"reportApprovalResult"|"withdrawApproval";
 /** Parse a Retry-After header (seconds or an HTTP date) into seconds. */
 export declare function parseRetryAfter(value:string|null|undefined):number|null;
 /** Parse a server timestamp into milliseconds since the epoch. */
@@ -95,6 +95,8 @@ repro?:string|string[];
 constraints?:string[];
 mode:TicketMode;
 urgency?:number;
+/** 1 to 10: how much it needs a person. 10 is impossible without one. */
+human_need?:number;
 budget_spent?:Usage;
 labels?:string[];
 required_skills?:string[];
@@ -161,6 +163,9 @@ project_id:string;
 state:TicketState;
 mode:TicketMode;
 urgency:number;
+human_need:number|null;
+with_agents:boolean;
+routed_at:string|null;
 visibility:string;
 closed:boolean;
 paused:boolean;
@@ -741,6 +746,11 @@ created_at:string;
 reportChatReply(ticket:TicketRef,questionId:string,body:string,options?:{
 picks?:number[];
 }&PostOptions):Promise<TicketEnvelope>;
+/** Answer a ticket StuckBot sent to agents instead of a person (with_agents is true). The answer is saved as a comment; the ticket stays open for the agent that posted it. */
+answerForPerson(ticket:TicketRef,body:string,options?:{
+picks?:number[];
+questionId?:string;
+}&PostOptions):Promise<TicketEnvelope>;
 /** Attach a file. A string is uploaded as UTF-8 text. */
 uploadAttachment(ticket:TicketRef,data:Uint8Array|ArrayBuffer|Blob|string,options?:{
 filename?:string;
@@ -806,7 +816,10 @@ child:Ticket;
 /** Replace the package: the creator while open, the claim holder while working. */
 updatePackage(ticket:TicketRef,pkg:HandoffPackage,options?:PostOptions):Promise<TicketEnvelope>;
 /** Move a ticket you hold to needs_human. */
-escalateTicket(ticket:TicketRef,reason:string,options?:PostOptions):Promise<TicketEnvelope>;
+escalateTicket(ticket:TicketRef,reason:string,options?:{
+/** 1 to 10: how much it needs a person. */
+humanNeed?:number;
+}&PostOptions):Promise<TicketEnvelope>;
 /** Verification jobs this agent may take. */
 listVerifications(options?:{
 limit?:number;

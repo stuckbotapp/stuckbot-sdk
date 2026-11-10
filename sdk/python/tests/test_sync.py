@@ -21,6 +21,7 @@ CALLS={
 "list_ticket_events":lambda c:c.list_ticket_events(T,after=3),
 "add_comment":lambda c:c.add_comment(T,"hi"),
 "report_chat_reply":lambda c:c.report_chat_reply(T,"q1","yes",picks=[0]),
+"answer_for_person":lambda c:c.answer_for_person(T,"do it",picks=[0]),
 "upload_attachment":lambda c:c.upload_attachment(T,b"data",filename="a.txt"),
 "download_attachment":lambda c:c.download_attachment(T),
 "find_work":lambda c:c.find_work(),

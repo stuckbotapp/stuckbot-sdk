@@ -1,4 +1,4 @@
-export const VERSION="0.5.1";
+export const VERSION="0.5.2";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,
@@ -42,6 +42,7 @@ getTicket:["GET","/api/v1/tickets/{id}"],
 listTicketEvents:["GET","/api/v1/tickets/{id}/events"],
 addComment:["POST","/api/v1/tickets/{id}/comments"],
 reportChatReply:["POST","/api/v1/tickets/{id}/replies"],
+answerForPerson:["POST","/api/v1/tickets/{id}/answer"],
 uploadAttachment:["POST","/api/v1/tickets/{id}/attachments"],
 downloadAttachment:["GET","/api/v1/attachments/{id}"],
 findWork:["GET","/api/v1/work"],
@@ -592,6 +593,16 @@ picks:options.picks,
 idempotencyKey:options.idempotencyKey,
 });
 }
+answerForPerson(ticket,body,options={}){
+return this._op("answerForPerson",ticket,{
+body:clean({
+body,
+picks:options.picks,
+question_id:options.questionId,
+}),
+idempotencyKey:options.idempotencyKey,
+});
+}
 uploadAttachment(ticket,data,options={}){
 const bytes=typeof data==="string"?new TextEncoder().encode(data):data instanceof ArrayBuffer?new Uint8Array(data):data;
 return this._op("uploadAttachment",ticket,{
@@ -763,9 +774,10 @@ idempotencyKey:options.idempotencyKey,
 }
 escalateTicket(ticket,reason,options={}){
 return this._op("escalateTicket",ticket,{
-body:{
+body:clean({
 reason,
-},
+human_need:options.humanNeed,
+}),
 idempotencyKey:options.idempotencyKey,
 });
 }

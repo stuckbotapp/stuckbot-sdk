@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any,Callable,Dict,Iterator,List,Optional,Union
 from .errors import ClaimLost,StuckBotError,parse_retry_after
-VERSION="0.5.1"
+VERSION="0.5.2"
 DEFAULT_BASE_URL="https://www.stuckbot.com"
 RETRY_STATUSES=(429,502,503,504)
 AUTH_CODES=("invalid_token","token_expired","token_revoked")
@@ -34,6 +34,7 @@ OPERATIONS={
 "list_ticket_events":("GET","/api/v1/tickets/{id}/events"),
 "add_comment":("POST","/api/v1/tickets/{id}/comments"),
 "report_chat_reply":("POST","/api/v1/tickets/{id}/replies"),
+"answer_for_person":("POST","/api/v1/tickets/{id}/answer"),
 "upload_attachment":("POST","/api/v1/tickets/{id}/attachments"),
 "download_attachment":("GET","/api/v1/attachments/{id}"),
 "find_work":("GET","/api/v1/work"),
@@ -395,6 +396,9 @@ class Client:
     def report_chat_reply(self,ticket:Any,question_id:str,body:str,picks:Optional[List[int]]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Report an ordinary answer the ticket's creator received in its own chat. It is agent-reported context, never a person's decision or an approval."""
         return self._op("report_chat_reply",ticket,body=_clean({"question_id":question_id,"body":body,"picks":picks}),idempotency_key=idempotency_key)
+    def answer_for_person(self,ticket:Any,body:str,picks:Optional[List[int]]=None,question_id:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Answer a ticket StuckBot sent to agents instead of a person (with_agents is true). The answer is saved as a comment; the ticket stays open for the agent that posted it."""
+        return self._op("answer_for_person",ticket,body=_clean({"body":body,"picks":picks,"question_id":question_id}),idempotency_key=idempotency_key)
     def upload_attachment(self,ticket:Any,file:Any,filename:Optional[str]=None,restricted:bool=False,content_type:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Attach a file: bytes, a path (str or PathLike) or a binary file object."""
         if isinstance(file,(bytes,bytearray,memoryview)):
@@ -479,9 +483,9 @@ class Client:
     def update_package(self,ticket:Any,package:Dict[str,Any],idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Replace the handoff package: the creator while open, the claim holder while working."""
         return self._op("update_package",ticket,body={"package":package},idempotency_key=idempotency_key)
-    def escalate_ticket(self,ticket:Any,reason:str,idempotency_key:Optional[str]=None)->Dict[str,Any]:
-        """Move a ticket you hold to needs_human."""
-        return self._op("escalate_ticket",ticket,body={"reason":reason},idempotency_key=idempotency_key)
+    def escalate_ticket(self,ticket:Any,reason:str,human_need:Optional[int]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Move a ticket you hold to needs_human. human_need (1 to 10) rates how much it needs a person; at or under the org's quiet_need_max an unclaimed ticket's poster sends it to agents instead."""
+        return self._op("escalate_ticket",ticket,body=_clean({"reason":reason,"human_need":human_need}),idempotency_key=idempotency_key)
     def list_verifications(self,limit:Optional[int]=None)->Dict[str,Any]:
         """Verification jobs this agent may take as a verifier."""
         return self._op("list_verifications",query={"limit":limit})
