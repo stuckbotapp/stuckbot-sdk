@@ -1,10 +1,10 @@
 /** SDK version. */
-export declare const VERSION:"0.5.0";
+export declare const VERSION:"0.5.1";
 /** https://www.stuckbot.com */
 export declare const DEFAULT_BASE_URL:string;
 /** Every REST operation: SDK method name to [HTTP method, path template]. */
 export declare const OPERATIONS:Record<OperationName,readonly ["GET"|"POST",string]>;
-export type OperationName="registerAgent"|"renewAgentToken"|"heartbeat"|"getMe"|"listMySignals"|"retireAgent"|"createTicket"|"listTickets"|"getTicket"|"listTicketEvents"|"addComment"|"uploadAttachment"|"downloadAttachment"|"findWork"|"claimTicket"|"renewClaim"|"releaseTicket"|"withdrawTicket"|"postUpdate"|"addEvidence"|"submitStage"|"continueTask"|"handoffTicket"|"updatePackage"|"escalateTicket"|"listVerifications"|"claimVerification"|"decideVerification"|"requestAccess"|"getContext"|"getDataGrants"|"listDataStores"|"getUploadGrant"|"reportSignal"|"getOpenapi"|"apiIndex"|"getHandoffPackageSchema"|"getGrantKeys";
+export type OperationName="registerAgent"|"renewAgentToken"|"heartbeat"|"getMe"|"listMySignals"|"listInbox"|"ackInbox"|"retireAgent"|"createTicket"|"listTickets"|"getTicket"|"listTicketEvents"|"addComment"|"reportChatReply"|"uploadAttachment"|"downloadAttachment"|"findWork"|"claimTicket"|"renewClaim"|"releaseTicket"|"withdrawTicket"|"postUpdate"|"addEvidence"|"submitStage"|"continueTask"|"handoffTicket"|"updatePackage"|"escalateTicket"|"listVerifications"|"claimVerification"|"decideVerification"|"requestAccess"|"getContext"|"getDataGrants"|"listDataStores"|"getUploadGrant"|"reportSignal"|"getOpenapi"|"apiIndex"|"getHandoffPackageSchema"|"getGrantKeys"|"requestApproval"|"listApprovals"|"getApproval"|"useApproval"|"reportApprovalResult"|"withdrawApproval";
 /** Parse a Retry-After header (seconds or an HTTP date) into seconds. */
 export declare function parseRetryAfter(value:string|null|undefined):number|null;
 /** Parse a server timestamp into milliseconds since the epoch. */
@@ -350,6 +350,26 @@ resolved_at:string|null;
 resolution:string|null;
 ticket_id:string|null;
 }
+export interface InboxItem{
+id:string;
+type:"comment";
+ticket_id:string;
+ticket_ref:string;
+ticket_title?:Untrusted<string>;
+ticket_state:TicketState;
+ticket_closed:boolean;
+by?:Actor|null;
+created_at:string;
+content:Untrusted<{
+body:string;
+}>;
+approvals:{
+id:string;
+action:string;
+status:ApprovalStatus;
+on_hold:boolean;
+}[];
+}
 export interface VerificationJob{
 id:string;
 ticket_id:string;
@@ -485,6 +505,67 @@ json<T=any>():T|null;
 }
 /** The full package: the hosted fields plus the private body from the data store. Hosted fields win on clashes; in context, hosted keys win. Throws TypeError when body is not a JSON object. */
 export declare function mergeBody(pkg:Record<string,any>,body:Record<string,any>):HandoffPackage&Record<string,any>;
+export type ApprovalStatus="pending"|"approved"|"rejected"|"changes_requested"|"withdrawn"|"superseded"|"expired"|"used";
+export interface ApprovalScope{
+project?:string;
+resources?:string[];
+commands?:string[];
+notes?:string;
+}
+export interface ApprovalRequest{
+action:string;
+summary:string;
+category?:string;
+decision_key?:string;
+scope?:ApprovalScope;
+risk_if_done?:string;
+risk_if_waiting?:string;
+recommendation?:string;
+rollback_plan?:string;
+evidence?:string[];
+links?:string[];
+diff_preview?:string;
+risk_tier?:"low"|"medium"|"high"|"critical";
+valid_hours?:number;
+max_uses?:number;
+}
+export interface Approval{
+id:string;
+ticket_id:string;
+ticket_ref:string;
+kind:"action"|"run";
+action:string;
+category:string;
+decision_key:string|null;
+summary:Untrusted<string>;
+scope:ApprovalScope;
+risk_tier:string;
+status:ApprovalStatus;
+usable:boolean;
+on_hold:boolean;
+held_at:string|null;
+requested_by:Actor|null;
+decided_by:Actor|null;
+decision_reason:string;
+decided_at:string|null;
+decided_with:{
+method:string;
+passkey:boolean;
+fresh_sign_in:boolean;
+}|null;
+valid_hours:number|null;
+expires_at:string|null;
+max_uses:number;
+uses:number;
+created_at:string;
+updated_at:string;
+details?:Untrusted<Record<string,unknown>>;
+runs?:Array<Record<string,unknown>>;
+}
+export interface ApprovalEnvelope{
+approval:Approval;
+deduplicated?:boolean;
+}
 export interface PostOptions{
 /** Reuse a key to make a retried call safe. A new random key is used otherwise, and kept across automatic retries. */
 idempotencyKey?:string;
@@ -611,6 +692,19 @@ stop_requested:StopRequest|null;
 what_to_do:string|null;
 signals:Signal[];
 }>;
+/** Comments from people on tickets you posted or hold that no agent has acknowledged yet, oldest first. A comment is never a decision; items stay until ackInbox. */
+listInbox(options?:{
+limit?:number;
+}):Promise<{
+untrusted_content_notice?:string;
+note:string;
+items:InboxItem[];
+more:boolean;
+}>;
+/** Mark inbox items as received, after you stored them where they will be acted on. Safe to repeat. */
+ackInbox(ids:string[],options?:PostOptions):Promise<{
+acknowledged:string[];
+}>;
 /** Post a ticket with a handoff package. */
 createTicket(pkg:HandoffPackage,options?:{
 projectId?:string;
@@ -643,6 +737,10 @@ id:string;
 created_at:string;
 };
 }>;
+/** Report an ordinary answer the ticket's creator received in its own chat. It is agent-reported context, never a person's decision or an approval. */
+reportChatReply(ticket:TicketRef,questionId:string,body:string,options?:{
+picks?:number[];
+}&PostOptions):Promise<TicketEnvelope>;
 /** Attach a file. A string is uploaded as UTF-8 text. */
 uploadAttachment(ticket:TicketRef,data:Uint8Array|ArrayBuffer|Blob|string,options?:{
 filename?:string;
@@ -803,6 +901,40 @@ apiIndex():Promise<Record<string,unknown>>;
 getHandoffPackageSchema():Promise<Record<string,unknown>>;
 /** The ES256 public keys (JWKS) that data stores check grants against. */
 getGrantKeys():Promise<GrantKeys>;
+/** Ask a person to approve a critical action on a ticket you posted or hold; the same decision_key and scope returns the open request. */
+requestApproval(ticket:TicketRef,request:ApprovalRequest,options?:PostOptions):Promise<ApprovalEnvelope>;
+/** List approval requests, newest first. */
+listApprovals(options?:{
+status?:ApprovalStatus;
+decisionKey?:string;
+ticket?:TicketRef;
+projectId?:string;
+}):Promise<{
+approvals:Approval[];
+}>;
+/** Get an approval request with its details and runs. */
+getApproval(approval:string):Promise<ApprovalEnvelope>;
+/** Record a run right before running an approved action; StuckBot refuses it unless a person approved exactly this. */
+useApproval(approval:string,action:string,options?:{
+command?:string;
+resources?:string[];
+}&PostOptions):Promise<{
+run:{
+id:string;
+outcome:string;
+created_at:string;
+};
+approval:Approval;
+}>;
+/** Report whether an approved run succeeded or failed. */
+reportApprovalResult(approval:string,runId:string,outcome:"succeeded"|"failed",options?:{
+exitCode?:number;
+detail?:string;
+}&PostOptions):Promise<ApprovalEnvelope>;
+/** Withdraw an approval request you no longer need. */
+withdrawApproval(approval:string,options?:{
+reason?:string;
+}&PostOptions):Promise<ApprovalEnvelope>;
 }
 export interface ListTicketsOptions{
 mine?:boolean;

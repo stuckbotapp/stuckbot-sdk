@@ -147,7 +147,7 @@ class VerifyingKey:
         w=pow(s,-1,N)
         pt=_add(_mul(e*w%N),_mul(r*w%N,self.point))
         return pt is not None and pt[0]%N==r
-def attestation(key:SigningKey,verification_id:str,ticket_id:str,criterion_key:str,stage:str,type:str,payload:Dict[str,Any],signed_at:Optional[float]=None)->Dict[str,str]:
+def attestation(key:SigningKey,verification_id:str,ticket_id:str,criterion_key:str,stage:str,type:str,payload:Dict[str,Any],signed_at:Optional[float]=None,candidate_commit_sha:Optional[str]=None,candidate_tree_sha:Optional[str]=None,criteria_sha256:Optional[str]=None,context:Optional[Dict[str,Any]]=None)->Dict[str,str]:
     """Build the attestation object StuckBot expects on a verifier's evidence item."""
     statement=json.dumps({
         "v":1,
@@ -158,17 +158,28 @@ def attestation(key:SigningKey,verification_id:str,ticket_id:str,criterion_key:s
         "type":type,
         "payload":payload,
         "signed_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(signed_at)),
+        "candidate_commit_sha":str(candidate_commit_sha or ""),
+        "candidate_tree_sha":str(candidate_tree_sha or ""),
+        "criteria_sha256":str(criteria_sha256 or ""),
+        "context":dict(context or {}),
     },separators=(",",":"),sort_keys=True).encode()
     return {
         "key":key.verifying_key().fingerprint(),
         "statement":b64url(statement),
         "signature":b64url(key.sign(statement)),
     }
-def check_attestation(public:VerifyingKey,att:Dict[str,Any])->Optional[Dict[str,Any]]:
-    """Return the signed statement if att carries a valid signature by public, else None."""
+def check_attestation(public:VerifyingKey,att:Dict[str,Any],expected_commit:Optional[str]=None,expected_tree:Optional[str]=None,expected_criteria_sha256:Optional[str]=None)->Optional[Dict[str,Any]]:
+    """Return the signed statement if att carries a valid signature by public and matches expected bindings, else None."""
     if att.get("key")!=public.fingerprint() or not att.get("statement") or not att.get("signature"):
         return None
     raw=unb64url(att["statement"])
     if not public.verify(raw,unb64url(att["signature"])):
         return None
-    return json.loads(raw)
+    st=json.loads(raw)
+    if expected_commit is not None and st.get("candidate_commit_sha")!=expected_commit:
+        return None
+    if expected_tree is not None and st.get("candidate_tree_sha")!=expected_tree:
+        return None
+    if expected_criteria_sha256 is not None and st.get("criteria_sha256")!=expected_criteria_sha256:
+        return None
+    return st

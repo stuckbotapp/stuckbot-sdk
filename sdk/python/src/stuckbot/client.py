@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from typing import Any,Callable,Dict,Iterator,List,Optional,Union
 from .errors import ClaimLost,StuckBotError,parse_retry_after
-VERSION="0.5.0"
+VERSION="0.5.1"
 DEFAULT_BASE_URL="https://www.stuckbot.com"
 RETRY_STATUSES=(429,502,503,504)
 AUTH_CODES=("invalid_token","token_expired","token_revoked")
@@ -25,12 +25,15 @@ OPERATIONS={
 "heartbeat":("POST","/api/v1/agents/me/heartbeat"),
 "get_me":("GET","/api/v1/agents/me"),
 "list_my_signals":("GET","/api/v1/agents/me/signals"),
+"list_inbox":("GET","/api/v1/agents/me/inbox"),
+"ack_inbox":("POST","/api/v1/agents/me/inbox/ack"),
 "retire_agent":("POST","/api/v1/agents/me/retire"),
 "create_ticket":("POST","/api/v1/tickets"),
 "list_tickets":("GET","/api/v1/tickets"),
 "get_ticket":("GET","/api/v1/tickets/{id}"),
 "list_ticket_events":("GET","/api/v1/tickets/{id}/events"),
 "add_comment":("POST","/api/v1/tickets/{id}/comments"),
+"report_chat_reply":("POST","/api/v1/tickets/{id}/replies"),
 "upload_attachment":("POST","/api/v1/tickets/{id}/attachments"),
 "download_attachment":("GET","/api/v1/attachments/{id}"),
 "find_work":("GET","/api/v1/work"),
@@ -58,6 +61,19 @@ OPERATIONS={
 "api_index":("GET","/api/v1"),
 "get_handoff_package_schema":("GET","/schemas/handoff-package-1.json"),
 "get_grant_keys":("GET","/.well-known/stuckbot-grant-keys.json"),
+"ingest_external_signal":("POST","/api/v1/ingest/{source}"),
+"get_ops_summary":("GET","/api/v1/ops/summary"),
+"update_ticket_dependencies":("POST","/api/v1/tickets/{id}/dependencies"),
+"list_project_memories":("GET","/api/v1/memories"),
+"record_project_memory":("POST","/api/v1/memories"),
+"dispatch_ticket_run":("POST","/api/v1/tickets/{id}/dispatch"),
+"inspect_agent_run":("POST","/api/v1/runs/{id}/inspect"),
+"request_approval":("POST","/api/v1/tickets/{id}/approvals"),
+"list_approvals":("GET","/api/v1/approvals"),
+"get_approval":("GET","/api/v1/approvals/{id}"),
+"use_approval":("POST","/api/v1/approvals/{id}/use"),
+"report_approval_result":("POST","/api/v1/approvals/{id}/result"),
+"withdraw_approval":("POST","/api/v1/approvals/{id}/withdraw"),
 }
 _REF=re.compile(r"^[A-Za-z0-9-]{1,64}$")
 def _env(name):
@@ -338,6 +354,12 @@ class Client:
     def list_my_signals(self,limit:Optional[int]=None)->Dict[str,Any]:
         """Recent signals for this agent plus any pending handoff or stop request."""
         return self._op("list_my_signals",query={"limit":limit})
+    def list_inbox(self,limit:Optional[int]=None)->Dict[str,Any]:
+        """Comments from people on tickets you posted or hold that no agent has acknowledged yet, oldest first. A comment is never a decision; items stay until ack_inbox."""
+        return self._op("list_inbox",query={"limit":limit})
+    def ack_inbox(self,ids:List[str],idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Mark inbox items as received, after you stored them where they will be acted on. Safe to repeat."""
+        return self._op("ack_inbox",body={"ids":list(ids)},idempotency_key=idempotency_key)
     def create_ticket(self,package:Dict[str,Any],project_id:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Post a ticket with a handoff package."""
         return self._op("create_ticket",body=_clean({"package":package,"project_id":project_id}),idempotency_key=idempotency_key)
@@ -370,6 +392,9 @@ class Client:
     def add_comment(self,ticket:Any,body:str,idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Comment on a ticket you can read, in any state."""
         return self._op("add_comment",ticket,body={"body":body},idempotency_key=idempotency_key)
+    def report_chat_reply(self,ticket:Any,question_id:str,body:str,picks:Optional[List[int]]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Report an ordinary answer the ticket's creator received in its own chat. It is agent-reported context, never a person's decision or an approval."""
+        return self._op("report_chat_reply",ticket,body=_clean({"question_id":question_id,"body":body,"picks":picks}),idempotency_key=idempotency_key)
     def upload_attachment(self,ticket:Any,file:Any,filename:Optional[str]=None,restricted:bool=False,content_type:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
         """Attach a file: bytes, a path (str or PathLike) or a binary file object."""
         if isinstance(file,(bytes,bytearray,memoryview)):
@@ -521,3 +546,42 @@ class Client:
     def get_grant_keys(self)->Dict[str,Any]:
         """The public keys (JWKS) StuckBot signs data grants with."""
         return self._op("get_grant_keys")
+    def ingest_external_signal(self,source:str,payload:Optional[Dict[str,Any]]=None,idempotency_key:Optional[str]=None,**fields:Any)->Dict[str,Any]:
+        """Ingest and deduplicate an external monitoring, CI, or security signal."""
+        return self._op("ingest_external_signal",source,what="source",body=dict(payload or {},**fields),idempotency_key=idempotency_key)
+    def get_ops_summary(self)->Dict[str,Any]:
+        """Get the Operations Command Center summary."""
+        return self._op("get_ops_summary")
+    def update_ticket_dependencies(self,ticket:Any,depends_on_ticket_id:str,action:str="add",idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Add or remove a prerequisite ticket dependency."""
+        return self._op("update_ticket_dependencies",ticket,body={"action":action,"depends_on_ticket_id":ref(depends_on_ticket_id)},idempotency_key=idempotency_key)
+    def list_project_memories(self,project_id:Optional[str]=None,fingerprint:Optional[str]=None,q:Optional[str]=None)->Dict[str,Any]:
+        """List verified project runbook memories."""
+        return self._op("list_project_memories",query=_clean({"project_id":project_id,"fingerprint":fingerprint,"q":q}))
+    def record_project_memory(self,title:str,fix_summary:Optional[str]=None,root_cause:Optional[str]=None,verification_command:Optional[str]=None,fingerprint:Optional[str]=None,project_id:Optional[str]=None,ticket_id:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Record a project runbook memory."""
+        return self._op("record_project_memory",body=_clean({"title":title,"fix_summary":fix_summary,"root_cause":root_cause,"verification_command":verification_command,"fingerprint":fingerprint,"project_id":project_id,"ticket_id":ticket_id}),idempotency_key=idempotency_key)
+    def dispatch_ticket_run(self,ticket:Any,tier:Optional[str]=None,action:Optional[str]=None,billing_mode:Optional[str]=None,reserve_usd:Optional[float]=None,candidate_branch:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Dispatch a tiered agent run with budget reservation."""
+        return self._op("dispatch_ticket_run",ticket,body=_clean({"tier":tier,"action":action,"billing_mode":billing_mode,"reserve_usd":reserve_usd,"candidate_branch":candidate_branch}),idempotency_key=idempotency_key)
+    def inspect_agent_run(self,run:Any,telemetry:Optional[Dict[str,Any]]=None,idempotency_key:Optional[str]=None,**fields:Any)->Dict[str,Any]:
+        """Evaluate spin telemetry for an active agent run."""
+        return self._op("inspect_agent_run",run,what="run",body=dict(telemetry or {},**fields),idempotency_key=idempotency_key)
+    def request_approval(self,ticket:Any,action:str,summary:str,scope:Optional[Dict[str,Any]]=None,decision_key:Optional[str]=None,category:Optional[str]=None,risk_if_done:Optional[str]=None,risk_if_waiting:Optional[str]=None,recommendation:Optional[str]=None,rollback_plan:Optional[str]=None,evidence:Optional[List[str]]=None,links:Optional[List[str]]=None,valid_hours:Optional[int]=None,max_uses:Optional[int]=None,risk_tier:Optional[str]=None,diff_preview:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Ask a person to approve a critical action on a ticket you posted or hold; the same decision_key and scope returns the open request."""
+        return self._op("request_approval",ticket,body=_clean({"action":action,"summary":summary,"scope":scope,"decision_key":decision_key,"category":category,"risk_if_done":risk_if_done,"risk_if_waiting":risk_if_waiting,"recommendation":recommendation,"rollback_plan":rollback_plan,"evidence":evidence,"links":links,"valid_hours":valid_hours,"max_uses":max_uses,"risk_tier":risk_tier,"diff_preview":diff_preview}),idempotency_key=idempotency_key)
+    def list_approvals(self,status:Optional[str]=None,decision_key:Optional[str]=None,ticket:Any=None,project_id:Optional[str]=None)->Dict[str,Any]:
+        """List approval requests, newest first."""
+        return self._op("list_approvals",query=_clean({"status":status,"decision_key":decision_key,"ticket":None if ticket is None else ref(ticket),"project_id":project_id}))
+    def get_approval(self,approval:Any)->Dict[str,Any]:
+        """Get an approval request with its details and runs."""
+        return self._op("get_approval",approval,what="approval")
+    def use_approval(self,approval:Any,action:str,command:Optional[str]=None,resources:Optional[List[str]]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Record a run right before running an approved action; StuckBot refuses it unless a person approved exactly this."""
+        return self._op("use_approval",approval,what="approval",body=_clean({"action":action,"command":command,"resources":resources}),idempotency_key=idempotency_key)
+    def report_approval_result(self,approval:Any,run_id:str,outcome:str,exit_code:Optional[int]=None,detail:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Report whether an approved run succeeded or failed."""
+        return self._op("report_approval_result",approval,what="approval",body=_clean({"run_id":run_id,"outcome":outcome,"exit_code":exit_code,"detail":detail}),idempotency_key=idempotency_key)
+    def withdraw_approval(self,approval:Any,reason:Optional[str]=None,idempotency_key:Optional[str]=None)->Dict[str,Any]:
+        """Withdraw an approval request you no longer need."""
+        return self._op("withdraw_approval",approval,what="approval",body=_clean({"reason":reason}),idempotency_key=idempotency_key)

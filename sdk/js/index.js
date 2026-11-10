@@ -1,4 +1,4 @@
-export const VERSION="0.5.0";
+export const VERSION="0.5.1";
 export const DEFAULT_BASE_URL="https://www.stuckbot.com";
 const RETRY_STATUSES=new Set([
 429,
@@ -33,12 +33,15 @@ renewAgentToken:["POST","/api/v1/agents/me/token"],
 heartbeat:["POST","/api/v1/agents/me/heartbeat"],
 getMe:["GET","/api/v1/agents/me"],
 listMySignals:["GET","/api/v1/agents/me/signals"],
+listInbox:["GET","/api/v1/agents/me/inbox"],
+ackInbox:["POST","/api/v1/agents/me/inbox/ack"],
 retireAgent:["POST","/api/v1/agents/me/retire"],
 createTicket:["POST","/api/v1/tickets"],
 listTickets:["GET","/api/v1/tickets"],
 getTicket:["GET","/api/v1/tickets/{id}"],
 listTicketEvents:["GET","/api/v1/tickets/{id}/events"],
 addComment:["POST","/api/v1/tickets/{id}/comments"],
+reportChatReply:["POST","/api/v1/tickets/{id}/replies"],
 uploadAttachment:["POST","/api/v1/tickets/{id}/attachments"],
 downloadAttachment:["GET","/api/v1/attachments/{id}"],
 findWork:["GET","/api/v1/work"],
@@ -66,6 +69,19 @@ getOpenapi:["GET","/api/v1/openapi.json"],
 apiIndex:["GET","/api/v1"],
 getHandoffPackageSchema:["GET","/schemas/handoff-package-1.json"],
 getGrantKeys:["GET","/.well-known/stuckbot-grant-keys.json"],
+ingestExternalSignal:["POST","/api/v1/ingest/{source}"],
+getOpsSummary:["GET","/api/v1/ops/summary"],
+updateTicketDependencies:["POST","/api/v1/tickets/{id}/dependencies"],
+listProjectMemories:["GET","/api/v1/memories"],
+recordProjectMemory:["POST","/api/v1/memories"],
+dispatchTicketRun:["POST","/api/v1/tickets/{id}/dispatch"],
+inspectAgentRun:["POST","/api/v1/runs/{id}/inspect"],
+requestApproval:["POST","/api/v1/tickets/{id}/approvals"],
+listApprovals:["GET","/api/v1/approvals"],
+getApproval:["GET","/api/v1/approvals/{id}"],
+useApproval:["POST","/api/v1/approvals/{id}/use"],
+reportApprovalResult:["POST","/api/v1/approvals/{id}/result"],
+withdrawApproval:["POST","/api/v1/approvals/{id}/withdraw"],
 };
 const REF=/^[A-Za-z0-9-]{1,64}$/;
 function env(name){
@@ -486,6 +502,21 @@ limit:options.limit,
 },
 });
 }
+listInbox(options={}){
+return this._op("listInbox",undefined,{
+query:{
+limit:options.limit,
+},
+});
+}
+ackInbox(ids,options={}){
+return this._op("ackInbox",undefined,{
+body:{
+ids:[...ids],
+},
+idempotencyKey:options.idempotencyKey,
+});
+}
 createTicket(pkg,options={}){
 return this._op("createTicket",undefined,{
 body:clean({
@@ -548,6 +579,16 @@ return this._op("addComment",ticket,{
 body:{
 body,
 },
+idempotencyKey:options.idempotencyKey,
+});
+}
+reportChatReply(ticket,questionId,body,options={}){
+return this._op("reportChatReply",ticket,{
+body:clean({
+question_id:questionId,
+body,
+picks:options.picks,
+}),
 idempotencyKey:options.idempotencyKey,
 });
 }
@@ -889,6 +930,105 @@ return this._op("getHandoffPackageSchema");
 }
 getGrantKeys(){
 return this._op("getGrantKeys");
+}
+ingestExternalSignal(source,payload={},options={}){
+return this._op("ingestExternalSignal",source,{
+body:payload,
+idempotencyKey:options.idempotencyKey,
+},"source");
+}
+getOpsSummary(){
+return this._op("getOpsSummary");
+}
+updateTicketDependencies(ticket,dependsOnTicketId,options={}){
+return this._op("updateTicketDependencies",ticket,{
+body:{
+action:options.action??"add",
+depends_on_ticket_id:ref(dependsOnTicketId),
+},
+idempotencyKey:options.idempotencyKey,
+});
+}
+listProjectMemories(options={}){
+return this._op("listProjectMemories",undefined,{
+query:{
+project_id:options.projectId,
+fingerprint:options.fingerprint,
+q:options.q,
+},
+});
+}
+recordProjectMemory(memory,options={}){
+return this._op("recordProjectMemory",undefined,{
+body:clean(memory),
+idempotencyKey:options.idempotencyKey,
+});
+}
+dispatchTicketRun(ticket,options={}){
+return this._op("dispatchTicketRun",ticket,{
+body:clean({
+tier:options.tier,
+action:options.action,
+billing_mode:options.billingMode,
+reserve_usd:options.reserveUsd,
+candidate_branch:options.candidateBranch,
+}),
+idempotencyKey:options.idempotencyKey,
+});
+}
+inspectAgentRun(run,telemetry={},options={}){
+return this._op("inspectAgentRun",run,{
+body:telemetry,
+idempotencyKey:options.idempotencyKey,
+},"run");
+}
+requestApproval(ticket,request,options={}){
+return this._op("requestApproval",ticket,{
+body:clean(request),
+idempotencyKey:options.idempotencyKey,
+});
+}
+listApprovals(options={}){
+return this._op("listApprovals",undefined,{
+query:{
+status:options.status,
+decision_key:options.decisionKey,
+ticket:options.ticket===undefined?undefined:ref(options.ticket),
+project_id:options.projectId,
+},
+});
+}
+getApproval(approval){
+return this._op("getApproval",approval,{},"approval");
+}
+useApproval(approval,action,options={}){
+return this._op("useApproval",approval,{
+body:clean({
+action,
+command:options.command,
+resources:options.resources,
+}),
+idempotencyKey:options.idempotencyKey,
+},"approval");
+}
+reportApprovalResult(approval,runId,outcome,options={}){
+return this._op("reportApprovalResult",approval,{
+body:clean({
+run_id:runId,
+outcome,
+exit_code:options.exitCode,
+detail:options.detail,
+}),
+idempotencyKey:options.idempotencyKey,
+},"approval");
+}
+withdrawApproval(approval,options={}){
+return this._op("withdrawApproval",approval,{
+body:clean({
+reason:options.reason,
+}),
+idempotencyKey:options.idempotencyKey,
+},"approval");
 }
 }
 export class WorkItem{

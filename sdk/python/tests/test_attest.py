@@ -97,5 +97,24 @@ class VerifierTest(unittest.TestCase):
         big=run_command([sys.executable,"-c","print('x'*100000)"],cfg)
         self.assertLessEqual(len(big["output_excerpt"]),2000)
         self.assertEqual(len(big["output_sha256"]),64)
+    def test_mixed_criteria_and_commit_bound_attestation(self):
+        k=SigningKey.generate()
+        att=attestation(k,"v1","t1","b1","blocker","command_run",{"command":"make test","exit_code":0},candidate_commit_sha="a"*40,candidate_tree_sha="b"*40,criteria_sha256="c"*64,context={"sandbox":"bwrap"})
+        st=check_attestation(k.verifying_key(),att,expected_commit="a"*40,expected_tree="b"*40,expected_criteria_sha256="c"*64)
+        self.assertIsNotNone(st)
+        self.assertEqual(st["candidate_commit_sha"],"a"*40)
+        self.assertEqual(st["candidate_tree_sha"],"b"*40)
+        self.assertEqual(st["criteria_sha256"],"c"*64)
+        self.assertIsNone(check_attestation(k.verifying_key(),att,expected_commit="d"*40))
+        cfg=self.cfg(allow=["python3 -c 'print(1)'",["true"],"pytest -q"],allow_urls=["https://status.example.com/health"])
+        mixed=plan(self.ticket(
+            {"key":"c1","method":"command","command":"python3 -c \"print(1)\""},
+            {"key":"c2","method":"test_suite","command":"pytest -q"},
+            {"key":"c3","method":"log_match","pattern":"READY","log_file":"app.log"},
+            {"key":"c4","method":"external_check","url":"https://status.example.com/health","expected":"200"},
+            {"key":"c5","method":"external_check","url":"https://platform.example.com/check","expected":"200"},
+            {"key":"c6","method":"manual","expected":"ok"},
+        ),"blocker",cfg)
+        self.assertEqual([c["key"] for c in mixed],["c1","c2","c3","c4"])
 if __name__=="__main__":
     unittest.main()

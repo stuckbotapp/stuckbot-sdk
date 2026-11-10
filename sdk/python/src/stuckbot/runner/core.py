@@ -370,7 +370,7 @@ class Session:
                 self.execute()
                 outcome=self.finish()
             else:
-                outcome="no_data"
+                outcome=self.run.get("outcome") or "no_data"
         except Exception as e:
             log.exception("%s: session failed",self.ticket.get("ref"))
             self.audit("session_error",error=f"{type(e).__name__}: {e}"[:500])
@@ -446,15 +446,27 @@ class Session:
         if self.ws.get("repo"):
             shutil.rmtree(work)
             git("clone","--quiet","--no-hardlinks",self.ws["repo"],work)
+            req_commit=str(ws.get("commit") or "").strip()
+            req_branch=str(ws.get("branch") or "").strip()
             wanted=None
-            for rev in (ws.get("commit"),("origin/"+ws["branch"]) if ws.get("branch") else None):
-                if rev and _REV.match(rev) and ".." not in rev and git("rev-parse","--verify","--quiet",rev+"^{commit}",cwd=work,check=False).returncode==0:
-                    wanted=rev
-                    break
-            if wanted:
+            if req_commit or req_branch:
+                candidates=[]
+                if req_commit:
+                    candidates.append(req_commit)
+                if req_branch:
+                    candidates.extend(["origin/"+req_branch,"refs/heads/"+req_branch,req_branch])
+                for rev in candidates:
+                    if rev and _REV.match(rev) and ".." not in rev and git("rev-parse","--verify","--quiet",rev+"^{commit}",cwd=work,check=False).returncode==0:
+                        wanted=rev
+                        break
+                if not wanted:
+                    bad=req_commit or req_branch
+                    self.audit("prepare_failed",reason="bad_ref",commit=req_commit or None,branch=req_branch or None)
+                    self.give_back(f"Runner {self.cfg.name} could not check out the commit or branch this ticket names ({bad}) in workspace {self.ws['name']}, so it did not start a session.",retry=False,outcome="bad_ref")
+                    return False
                 git("checkout","--quiet","--detach",wanted,"--",cwd=work)
             self.base=git("rev-parse","HEAD",cwd=work).stdout.strip()
-            where=f"a git checkout of workspace {self.ws['name']} at commit {self.base}"+("" if wanted or not (ws.get("commit") or ws.get("branch")) else " (the commit or branch the ticket names was not found, so this is the default branch)")
+            where=f"a git checkout of workspace {self.ws['name']} at commit {self.base}"
         out=os.path.join(self.dir,"out")
         with open(os.path.join(out,"ticket.json"),"w") as f:
             json.dump(self.ticket,f,indent=1,sort_keys=True)
@@ -463,10 +475,20 @@ class Session:
         self.update(state="claimed")
         self.audit("prepared",workspace=self.ws.get("name"),base=self.base)
         return True
+    def ensure_proxy(self)->sb.EgressProxy:
+        if not self.proxy:
+            os.makedirs(os.path.join(self.dir,"sock"),mode=0o700,exist_ok=True)
+            self.proxy=sb.EgressProxy(os.path.join(self.dir,"sock","egress.sock"),self.egress(),lambda kind,**kw:self.audit(kind,**kw))
+        return self.proxy
     def env(self)->Dict[str,str]:
         e={"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","TERM":"dumb","DISABLE_TELEMETRY":"1","DISABLE_ERROR_REPORTING":"1","CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1","DISABLE_AUTOUPDATER":"1","STUCKBOT_RUNNER":"1","PYTHONDONTWRITEBYTECODE":"1"}
-        e.update(self.adapter.credentials())
-        return self.runner.sandbox.env(e,self.dir)
+        creds=self.adapter.credentials()
+        skeys=self.adapter.secret_keys()
+        if creds:
+            proxy=self.ensure_proxy()
+            creds=proxy.broker_credentials(creds,skeys,self.runner.sandbox.proxy_url() or f"http://127.0.0.1:{sb.PROXY_PORT}")
+        e.update(creds)
+        return self.runner.sandbox.env(e,self.dir,proxy=True)
     def egress(self)->List[str]:
         return self.adapter.egress()+list(self.ws.get("egress",[]))+list(self.cfg.egress)
     def spawn(self,argv:List[str],env:Dict[str,str],stdin:Optional[bytes],stdout:Any)->subprocess.Popen:
@@ -502,10 +524,8 @@ class Session:
             except OSError:
                 pass
     def execute(self)->None:
-        def log_egress(kind,**kw):
-            self.audit(kind,**kw)
         if self.runner.sandbox.kind=="bwrap":
-            self.proxy=sb.EgressProxy(os.path.join(self.dir,"sock","egress.sock"),self.egress(),log_egress)
+            self.ensure_proxy()
         prompt_text=open(os.path.join(self.dir,"out","prompt.md")).read()
         argv=self.adapter.command(prompt_text,self.paths,self.runner.sandbox.kind!="none",self.cap)
         self.proc=self.spawn(argv,self.env(),self.adapter.stdin(prompt_text),subprocess.PIPE)
@@ -579,7 +599,7 @@ class Session:
         code,note=0,""
         timeout=float(self.cfg.limits["check_timeout_seconds"])
         with open(logp,"wb") as f:
-            p=self.spawn(argv,self.runner.sandbox.env({"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":self.paths["home"],"PYTHONDONTWRITEBYTECODE":"1"},self.dir),None,f)
+            p=self.spawn(argv,self.runner.sandbox.env({"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":self.paths["home"],"PYTHONDONTWRITEBYTECODE":"1"},self.dir,proxy=False),None,f)
             try:
                 code=p.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -630,16 +650,18 @@ class Session:
             else:
                 problems.append(f"{c['key']}: no evidence")
         return evidence,problems
-    def deliver(self)->Optional[Dict[str,Any]]:
-        """Commit what the session changed inside the sandbox, then copy it into the authorized repo as a new branch. Git never runs on the session's files outside the sandbox."""
+    def stage_candidate(self)->Optional[Dict[str,Any]]:
+        """Commit what the session changed inside the sandbox and bundle it in out/, without touching the host repo."""
         if not self.ws.get("repo") or not self.base or not os.path.isdir(os.path.join(self.dir,"work")):
             return None
         out=self.paths["out"]
         msg=f"{self.ticket.get('ref')}: changes from StuckBot Runner {self.cfg.name} ({self.profile})"
-        script=("cd "+self.paths["work"]+" && git add -A && { git diff --cached --quiet || git -c user.name='StuckBot Runner' -c user.email=runner@localhost -c commit.gpgsign=false commit -q --no-verify -m \"$MSG\"; } && "
-                "git diff --stat "+self.base+" HEAD > "+out+"/diffstat.txt && git diff "+self.base+" HEAD > "+out+"/changes.patch && "
-                "if [ \"$(git rev-parse HEAD)\" != "+self.base+" ]; then git bundle create -q "+out+"/changes.bundle "+self.base+"..HEAD; fi")
-        env=self.runner.sandbox.env({"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":self.paths["home"],"MSG":msg,"GIT_CONFIG_NOSYSTEM":"1"},self.dir)
+        g="git -c core.hooksPath=/dev/null"
+        script=("cd "+self.paths["work"]+" && "+g+" add -A && { "+g+" diff --cached --quiet || "+g+" -c user.name='StuckBot Runner' -c user.email=runner@localhost -c commit.gpgsign=false commit -q --no-verify -m \"$MSG\"; } && "
+                +g+" diff --stat "+self.base+" HEAD > "+out+"/diffstat.txt && "+g+" diff "+self.base+" HEAD > "+out+"/changes.patch && "
+                +g+" rev-parse HEAD > "+out+"/head_commit.txt && "+g+" rev-parse HEAD^{tree} > "+out+"/head_tree.txt && "
+                "if [ \"$("+g+" rev-parse HEAD)\" != "+self.base+" ]; then "+g+" bundle create -q "+out+"/changes.bundle "+self.base+"..HEAD; fi")
+        env=self.runner.sandbox.env({"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":self.paths["home"],"MSG":msg,"GIT_CONFIG_NOSYSTEM":"1"},self.dir,proxy=False)
         with open(os.path.join(self.dir,"out","deliver.log"),"wb") as f:
             p=self.spawn(["/bin/sh","-c",script],env,None,f)
             code=p.wait(timeout=300)
@@ -651,21 +673,50 @@ class Session:
         if git("bundle","verify","-q",bundle,cwd=repo,check=False).returncode!=0:
             self.audit("deliver_refused",reason="bundle does not apply to the workspace repo")
             return None
-        branch=f"stuckbot/{self.ticket.get('ref')}"
-        n=1
-        while git("show-ref","--verify","--quiet","refs/heads/"+branch,cwd=repo,check=False).returncode==0:
-            n+=1
-            branch=f"stuckbot/{self.ticket.get('ref')}-{n}"
-        git("fetch","--quiet","--no-tags",bundle,"HEAD:refs/heads/"+branch,cwd=repo)
-        commit=git("rev-parse","refs/heads/"+branch,cwd=repo).stdout.strip()
         try:
             with open(os.path.join(self.dir,"out","diffstat.txt")) as f:
                 stat=f.read().strip().splitlines()[-1:]
         except OSError:
             stat=[]
-        d={"workspace":self.ws["name"],"branch":branch,"commit":commit,"base":self.base,"diffstat":stat[0].strip() if stat else ""}
+        commit,tree="",""
+        try:
+            with open(os.path.join(self.dir,"out","head_commit.txt")) as f:
+                commit=f.read().strip()
+            with open(os.path.join(self.dir,"out","head_tree.txt")) as f:
+                tree=f.read().strip()
+        except OSError:
+            pass
+        return {"bundle":bundle,"commit":commit,"tree":tree,"base":self.base,"diffstat":stat[0].strip() if stat else ""}
+    def deliver(self,staged:Optional[Dict[str,Any]]=None)->Optional[Dict[str,Any]]:
+        """Copy a verified candidate bundle into the authorized repo as stuckbot/{ref} and stuckbot/{ref}-attempt-{n}."""
+        if staged is None:
+            staged=self.stage_candidate()
+        if not staged:
+            return None
+        repo=self.ws["repo"]
+        ref=str(self.ticket.get("ref") or "ticket")
+        attempt=int(self.run.get("attempt") or 1)
+        branch=f"stuckbot/{ref}"
+        attempt_branch=f"stuckbot/{ref}-attempt-{attempt}"
+        git("fetch","--quiet","--no-tags","--force",staged["bundle"],f"HEAD:refs/heads/{branch}",f"HEAD:refs/heads/{attempt_branch}",cwd=repo)
+        commit=git("rev-parse","refs/heads/"+branch,cwd=repo).stdout.strip()
+        tree=git("rev-parse","refs/heads/"+branch+"^{tree}",cwd=repo).stdout.strip()
+        d={"workspace":self.ws["name"],"branch":branch,"attempt_branch":attempt_branch,"commit":commit,"tree":tree,"base":self.base,"diffstat":staged.get("diffstat","")}
         self.audit("delivered",**d)
         return d
+    def quarantine(self,staged:Optional[Dict[str,Any]]=None)->None:
+        if not (self.cfg.raw.get("quarantine_failed") or self.ws.get("quarantine_failed")):
+            return
+        if staged is None:
+            staged=self.stage_candidate()
+        if not staged:
+            return
+        repo=self.ws["repo"]
+        ref=str(self.ticket.get("ref") or "ticket")
+        attempt=int(self.run.get("attempt") or 1)
+        qref=f"refs/quarantine/stuckbot/{ref}-attempt-{attempt}"
+        git("fetch","--quiet","--no-tags","--force",staged["bundle"],f"HEAD:{qref}",cwd=repo,check=False)
+        self.audit("quarantined",ref=qref,commit=staged.get("commit",""))
     def money(self)->str:
         c=max(self.usage.cost,self.usage.reported_cost or 0)
         return f"about ${c:.2f}"
@@ -687,17 +738,20 @@ class Session:
         outcome=str(res.get("outcome") or "")
         delivered=None
         if outcome=="solved" and not self.killed:
-            delivered=self.deliver()
+            staged=self.stage_candidate()
             evidence,problems=self.checks(res)
             if not problems:
+                delivered=self.deliver(staged)
                 return self.submit(evidence,summary,delivered)
+            self.quarantine(staged)
             self.audit("checks_failed",problems=problems)
             why="the checks did not pass when the runner ran them: "+"; ".join(problems)
         elif outcome=="handoff" and not self.killed and isinstance(res.get("handoff"),dict):
-            delivered=self.deliver()
-            return self.handoff(res["handoff"],summary,delivered)
+            staged=self.stage_candidate()
+            self.quarantine(staged)
+            return self.handoff(res["handoff"],summary,None)
         else:
-            delivered=self.deliver()
+            self.quarantine()
             why={"budget_limit":f"it reached its spending limit of ${self.cap:g}","time_limit":"it ran out of time","disk_limit":"it used too much disk","stop_requested":"StuckBot asked it to stop","handoff_requested":"StuckBot's budget or watchdog asked it to hand off"}.get(self.killed or "") or (str(res.get("stuck_reason") or "")[:1000] and "it got stuck: "+str(res.get("stuck_reason"))[:1000]) or ("the provider failed: "+(self.usage.error or f"exit code {self.proc.returncode}") if provider_failed else "it ended without a usable result")
         return self.failed(why,summary,delivered)
     def describe(self,delivered:Optional[Dict[str,Any]])->str:
@@ -707,9 +761,14 @@ class Session:
     def submit(self,evidence:List[Dict[str,Any]],summary:str,delivered:Optional[Dict[str,Any]])->str:
         tid=self.ticket["id"]
         c=self.agent.client
-        c.post_update(tid,f"Runner {self.cfg.name} ({self.profile}{', '+str(self.p.get('model')) if self.p.get('model') else ''}) solved this in a sandboxed session and reran the checks itself. {summary}{self.describe(delivered)} Spent {self.money()}."[:20000],{"runner":self.cfg.name,"profile":self.profile,**({"branch":delivered["branch"],"commit":delivered["commit"]} if delivered else {})})
+        c.post_update(tid,f"Runner {self.cfg.name} ({self.profile}{', '+str(self.p.get('model')) if self.p.get('model') else ''}) solved this in a sandboxed session and reran the checks itself. {summary}{self.describe(delivered)} Spent {self.money()}."[:20000],{"runner":self.cfg.name,"profile":self.profile,**({"branch":delivered["branch"],"attempt_branch":delivered.get("attempt_branch",delivered["branch"]),"commit":delivered["commit"],"tree":delivered.get("tree","")} if delivered else {})})
         for e in evidence:
-            c.add_evidence(tid,e["criterion"],e["type"],e["payload"])
+            payload=dict(e["payload"])
+            if delivered and e["type"] in ("command_run","test_report"):
+                payload.setdefault("candidate_commit_sha",delivered["commit"])
+                if delivered.get("tree"):
+                    payload.setdefault("candidate_tree_sha",delivered["tree"])
+            c.add_evidence(tid,e["criterion"],e["type"],payload)
         self.lease.submit("blocker")
         self.update(state="submitted",outcome="solved")
         self.audit("submitted",evidence=len(evidence),**(delivered or {}))

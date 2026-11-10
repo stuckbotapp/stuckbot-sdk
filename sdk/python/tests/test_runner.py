@@ -46,8 +46,11 @@ if mode in ("fix","spend"):
     p=os.path.join(os.getcwd(),"calc.py")
     src=open(p).read()
     open(p,"w").write(src.replace("a - b","a + b"))
+if mode=="badfix":
+    p=os.path.join(os.getcwd(),"calc.py")
+    open(p,"w").write("def add(a, b):\n    return a * b\n")
 out=os.environ["OUT"]
-if mode in ("fix","lie","spend"):
+if mode in ("fix","lie","spend","badfix"):
     json.dump({"outcome":"solved","summary":"fixed add"},open(os.path.join(out,"result.json"),"w"))
 if mode=="stuck":
     json.dump({"outcome":"stuck","summary":"tried","stuck_reason":"no idea"},open(os.path.join(out,"result.json"),"w"))
@@ -590,9 +593,87 @@ class ConfigTest(unittest.TestCase):
             shutil.rmtree(d)
 class VerifierFillTest(unittest.TestCase):
     def test_only_well_formed_ticket_values_are_filled_in(self):
-        good={"ref":"SB-12","id":"6b358737-4b07-4a8f-b954-3536dff84eb9"}
+        good={"ref":"SB-12","id":"6b358737-4b07-4a8f-b954-3536dff84eb9","candidate":{"branch":"stuckbot/SB-12","commit":"a"*40}}
         self.assertEqual(fill(["git","fetch","origin","stuckbot/{ticket_ref}"],good),["git","fetch","origin","stuckbot/SB-12"])
+        self.assertEqual(fill(["git","checkout","{candidate_commit}"],good),["git","checkout","a"*40])
+        self.assertEqual(fill(["git","checkout","{candidate_branch}"],good),["git","checkout","stuckbot/SB-12"])
         for bad in ({"ref":"SB-1; rm -rf /","id":good["id"]},{"ref":"SB-1","id":"x"},{"ref":"--upload-pack=x","id":good["id"]}):
             self.assertIsNone(fill(["{ticket_ref}"],bad))
+        self.assertIsNone(fill(["{candidate_commit}"],{"ref":"SB-12","id":good["id"],"candidate":{"commit":"not_a_sha"}}))
+        self.assertIsNone(fill(["{candidate_branch}"],{"ref":"SB-12","id":good["id"],"candidate":{"branch":"../evil"}}))
+@unittest.skipUnless(HAS_BWRAP,"needs bubblewrap")
+class Phase0SecurityAndDeliveryTest(RunnerTest):
+    def test_failed_checks_do_not_deliver_to_refs_heads(self):
+        t=self.api.post()
+        cfg=self.config("badfix",limits__max_attempts_per_ticket=1)
+        self.run_once(cfg)
+        self.assertEqual(t["state"],"needs_human")
+        self.assertFalse(self.branch("stuckbot/SB-1"))
+        self.assertFalse(self.branch("stuckbot/SB-1-attempt-1"))
+    def test_retry_updates_canonical_branch_to_latest_verified_commit(self):
+        t=self.api.post()
+        c=self.config("badfix").raw
+        c["providers"]=[
+            {"name":"bad","adapter":"command","program":"/usr/bin/python3","args":["-I",self.agent,"badfix"],"max_usd_per_session":3,"price_per_mtok":{"input":3,"output":15},"env":{"OUT":"/out"}},
+            {"name":"good","adapter":"command","program":"/usr/bin/python3","args":["-I",self.agent,"fix"],"max_usd_per_session":3,"price_per_mtok":{"input":3,"output":15},"env":{"OUT":"/out"}},
+        ]
+        cfg=Config(c,self.dir)
+        self.run_once(cfg)
+        self.assertEqual(t["state"],"blocker_pending_verification")
+        self.assertTrue(self.branch("stuckbot/SB-1"))
+        self.assertTrue(self.branch("stuckbot/SB-1-attempt-2"))
+        self.assertFalse(self.branch("stuckbot/SB-1-attempt-1"))
+        s1=subprocess.run(["git","rev-parse","refs/heads/stuckbot/SB-1"],cwd=self.repo,capture_output=True,text=True).stdout.strip()
+        s2=subprocess.run(["git","rev-parse","refs/heads/stuckbot/SB-1-attempt-2"],cwd=self.repo,capture_output=True,text=True).stdout.strip()
+        self.assertEqual(s1,s2)
+        self.assertEqual(t["updates"][0]["progress"]["commit"],s1)
+    def test_missing_requested_commit_or_branch_fails_without_head_fallback(self):
+        t=self.api.post()
+        t["package"]["context"]["workspace"]["commit"]="deadbeef"*5
+        cfg=self.config("fix")
+        self.run_once(cfg)
+        self.assertEqual(t["state"],"open")
+        self.assertIn("could not check out the commit or branch",t.get("release_note") or "")
+        self.assertIn("prepare_failed",self.audit(cfg))
+        self.assertNotIn("session_started",self.audit(cfg))
+    def test_api_credentials_are_brokered_with_ephemeral_token_and_stripped_from_checks(self):
+        seen=[]
+        srv=socket.socket()
+        srv.bind(("127.0.0.1",0))
+        srv.listen(4)
+        port=srv.getsockname()[1]
+        def serve():
+            try:
+                conn,_=srv.accept()
+                data=conn.recv(4096).decode("latin-1")
+                seen.append(data)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                conn.close()
+            except OSError:
+                pass
+        threading.Thread(target=serve,daemon=True).start()
+        self.addCleanup(srv.close)
+        d=tempfile.mkdtemp(prefix="broker-test-")
+        self.addCleanup(shutil.rmtree,d,True)
+        for sub in ("work","out","home","sock"):
+            os.makedirs(os.path.join(d,sub))
+        proxy=sandbox.EgressProxy(os.path.join(d,"sock","egress.sock"),["api.anthropic.com"],lambda *a,**k:None,ports=(port,),allow_private=True,resolver=lambda h,p:["127.0.0.1"])
+        self.addCleanup(proxy.close)
+        real_val="host_only_cred_999"
+        brokered=proxy.broker_credentials({"ANTHROPIC_API_KEY":real_val,"ANTHROPIC_BASE_URL":f"http://api.anthropic.com:{port}"},["ANTHROPIC_API_KEY"])
+        self.assertTrue(brokered["ANTHROPIC_API_KEY"].startswith("sb-ephemeral-"))
+        self.assertNotEqual(brokered["ANTHROPIC_API_KEY"],real_val)
+        self.assertEqual(brokered["ANTHROPIC_BASE_URL"],"http://127.0.0.1:3128/_broker/anthropic")
+        box=sandbox.Bwrap({})
+        e=box.env({"PATH":"/usr/bin:/bin",**brokered},d,proxy=True)
+        code="import os,urllib.request\nreq=urllib.request.Request(os.environ['ANTHROPIC_BASE_URL']+'/v1/messages',data=b'{}',headers={'x-api-key':os.environ['ANTHROPIC_API_KEY']})\nprint(os.environ['ANTHROPIC_API_KEY'][:13],urllib.request.urlopen(req,timeout=5).read().decode())"
+        cmd=box.wrap(["/usr/bin/python3","-I","-c",code],e,d,[])
+        out=subprocess.run(cmd,env=e,capture_output=True,text=True,timeout=30).stdout.strip()
+        self.assertEqual(out,"sb-ephemeral- OK")
+        self.assertTrue(seen and ("x-api-key: "+real_val) in seen[0].lower())
+        self.assertNotIn("sb-ephemeral-",seen[0])
+        check_env=box.env({"PATH":"/usr/bin:/bin"},d,proxy=False)
+        self.assertNotIn("HTTP_PROXY",check_env)
+        self.assertNotIn("HTTPS_PROXY",check_env)
 if __name__=="__main__":
     unittest.main()

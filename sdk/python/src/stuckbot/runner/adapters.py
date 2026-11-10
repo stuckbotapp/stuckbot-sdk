@@ -47,6 +47,12 @@ class Adapter:
         return [] if p.startswith("/usr/") else [p]
     def egress(self)->List[str]:
         return list(self.default_egress)+list(self.profile.get("egress",[]))
+    def secret_keys(self)->List[str]:
+        keys=set(self.profile.get("env_files") or {})|set(self.profile.get("env_passthrough") or [])
+        for k,v in (self.profile.get("env") or {}).items():
+            if any(x in str(k).upper() for x in ("API_KEY","SECRET","TOKEN","PASSWORD","CREDENTIAL","AUTH","PRIVATE_KEY")) or str(v).startswith(("sk-","sba_","sbe_","ghp_","gho_","github_pat_")):
+                keys.add(str(k))
+        return sorted(keys)
     def credentials(self)->Dict[str,str]:
         """Environment for the session's own login, read from local files or this process's environment."""
         out={}

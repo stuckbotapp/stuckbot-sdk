@@ -18,6 +18,10 @@ getMe:c=>c.getMe(),
 listMySignals:c=>c.listMySignals({
 limit:5,
 }),
+listInbox:c=>c.listInbox({
+limit:5,
+}),
+ackInbox:c=>c.ackInbox([T]),
 retireAgent:c=>c.retireAgent(),
 createTicket:c=>c.createTicket({
 title:"t",
@@ -30,6 +34,9 @@ listTicketEvents:c=>c.listTicketEvents(T,{
 after:3,
 }),
 addComment:c=>c.addComment(T,"hi"),
+reportChatReply:c=>c.reportChatReply(T,"q1","yes",{
+picks:[0],
+}),
 uploadAttachment:c=>c.uploadAttachment(T,"data",{
 filename:"a.txt",
 }),
@@ -80,6 +87,40 @@ getOpenapi:c=>c.getOpenapi(),
 apiIndex:c=>c.apiIndex(),
 getHandoffPackageSchema:c=>c.getHandoffPackageSchema(),
 getGrantKeys:c=>c.getGrantKeys(),
+ingestExternalSignal:c=>c.ingestExternalSignal("github",{
+title:"CI failure",
+}),
+getOpsSummary:c=>c.getOpsSummary(),
+updateTicketDependencies:c=>c.updateTicketDependencies(T,"SB-2"),
+listProjectMemories:c=>c.listProjectMemories(),
+recordProjectMemory:c=>c.recordProjectMemory({
+title:"Known fix",
+fix_summary:"Restart service",
+}),
+dispatchTicketRun:c=>c.dispatchTicketRun(T,{
+tier:"fast",
+}),
+inspectAgentRun:c=>c.inspectAgentRun(T,{
+tokens_used:100,
+}),
+requestApproval:c=>c.requestApproval(T,{
+action:"drop table old",
+summary:"Old copy",
+}),
+listApprovals:c=>c.listApprovals({
+status:"pending",
+ticket:"SB-2",
+}),
+getApproval:c=>c.getApproval(T),
+useApproval:c=>c.useApproval(T,"drop table old",{
+command:"psql -c 'drop table old'",
+}),
+reportApprovalResult:c=>c.reportApprovalResult(T,T,"succeeded",{
+exitCode:0,
+}),
+withdrawApproval:c=>c.withdrawApproval(T,{
+reason:"not needed",
+}),
 };
 function camel(s){
 return s.replace(/_([a-z])/g,(_,x)=>x.toUpperCase());
